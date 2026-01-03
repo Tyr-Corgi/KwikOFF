@@ -1,0 +1,58 @@
+# Code Quality Configuration for KwikOFF
+# This file defines best practice standards for the codebase
+
+standards:
+  # File length limits
+  files:
+    max_length: 1000          # Hard limit - build will fail
+    warn_length: 500          # Warning threshold
+    exclude_patterns:
+      - "*/Migrations/*"      # Auto-generated migrations
+      - "*/bin/*"
+      - "*/obj/*"
+      - "*/wwwroot/lib/*"     # Third-party libraries
+  
+  # Class/Component length limits
+  classes:
+    max_length: 500           # Hard limit
+    warn_length: 300          # Warning threshold
+  
+  # Method length limits
+  methods:
+    max_length: 100           # Hard limit
+    warn_length: 50           # Warning threshold
+  
+  # Complexity limits (cyclomatic complexity)
+  complexity:
+    max_complexity: 15        # Hard limit
+    warn_complexity: 10       # Warning threshold
+
+enforcement:
+  # When to run checks
+  on_push: true               # Run on git push
+  on_pull_request: true       # Run on PR creation/update
+  weekly_audit: true          # Run weekly scheduled check
+  
+  # Actions on failure
+  block_push: true            # Prevent push if checks fail
+  create_issue: true          # Create GitHub issue on scheduled check failure
+  notify_slack: false         # Set to true and configure webhook if needed
+
+rationale:
+  file_length: |
+    Files should be under 1000 lines to maintain readability and testability.
+    Best practice is under 500 lines. Consider:
+    - Single Responsibility Principle
+    - Extracting helper classes
+    - Using partial classes for large auto-generated code
+  
+  class_length: |
+    Classes should be under 500 lines and ideally under 300 lines.
+    Large classes often indicate multiple responsibilities.
+    
+  method_length: |
+    Methods should be under 100 lines and ideally under 50 lines.
+    Long methods are harder to test and understand.
+    Extract smaller, focused methods.
+
+

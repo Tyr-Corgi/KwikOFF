@@ -1,0 +1,228 @@
+@page "/search"
+@rendermode InteractiveServer
+@using KwikOff.Web.Features.Database
+@using KwikOff.Web.Domain.Entities
+@inject IMediator Mediator
+
+<PageTitle>Search Products - KwikOff</PageTitle>
+
+<h1>Search Products</h1>
+<p>Search the Open Food Facts database by product name, brand, barcode, SKU, or category.</p>
+
+<div class="row">
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-body">
+                <div class="input-group mb-3">
+                    <input type="text" class="form-control" @bind="searchText" @bind:event="oninput"
+                           @onkeypress="HandleKeyPress" placeholder="Search by name, brand, barcode, category..." />
+                    <button class="btn btn-primary" @onclick="PerformSearch" disabled="@isSearching">
+                        @if (isSearching)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1" role="status"></span>
+                        }
+                        Search
+                    </button>
+                </div>
+
+                @if (!string.IsNullOrEmpty(errorMessage))
+                {
+                    <div class="alert alert-danger">@errorMessage</div>
+                }
+
+                @if (searchResults != null && searchResults.Products.Any())
+                {
+                    <div class="alert alert-info d-flex justify-content-between align-items-center">
+                        <div>
+                            Found <strong>@searchResults.TotalCount</strong> products
+                            @if (searchResults.TotalPages > 1)
+                            {
+                                <span>(Page @searchResults.Page of @searchResults.TotalPages)</span>
+                            }
+                        </div>
+                    </div>
+
+                    <div class="list-group mb-3">
+                        @foreach (var product in searchResults.Products)
+                        {
+                            <div class="list-group-item">
+                                <div class="row">
+                                    <div class="col-md-2">
+                                        @if (!string.IsNullOrEmpty(product.ImageSmallUrl))
+                                        {
+                                            <img src="@product.ImageSmallUrl" alt="@product.ProductName"
+                                                 class="img-fluid rounded" style="max-height: 100px;" />
+                                        }
+                                        else
+                                        {
+                                            <div class="bg-light d-flex align-items-center justify-content-center rounded"
+                                                 style="height: 80px; width: 80px;">
+                                                <span class="text-muted small">No image</span>
+                                            </div>
+                                        }
+                                    </div>
+                                    <div class="col-md-10">
+                                        <div class="d-flex justify-content-between">
+                                            <h6 class="mb-1">@(product.ProductName ?? "Unnamed Product")</h6>
+                                            @if (!string.IsNullOrEmpty(product.Brands))
+                                            {
+                                                <span class="badge bg-secondary">@product.Brands</span>
+                                            }
+                                        </div>
+                                        <p class="mb-1 small text-muted">
+                                            <strong>Barcode:</strong> <code>@product.Barcode</code>
+                                            @if (!string.IsNullOrEmpty(product.Categories))
+                                            {
+                                                <span class="ms-3"><strong>Category:</strong> @TruncateText(product.Categories, 50)</span>
+                                            }
+                                        </p>
+                                        @if (!string.IsNullOrEmpty(product.Quantity))
+                                        {
+                                            <p class="mb-1 small"><strong>Quantity:</strong> @product.Quantity</p>
+                                        }
+                                        @if (product.EnergyKcal100g.HasValue || product.Fat100g.HasValue || product.Carbohydrates100g.HasValue)
+                                        {
+                                            <p class="mb-0 small">
+                                                <strong>Nutrition (per 100g):</strong>
+                                                @if (product.EnergyKcal100g.HasValue)
+                                                {
+                                                    <span>@product.EnergyKcal100g kcal</span>
+                                                }
+                                                @if (product.Fat100g.HasValue)
+                                                {
+                                                    <span class="ms-2">Fat: @product.Fat100g.Value.ToString("F1")g</span>
+                                                }
+                                                @if (product.Carbohydrates100g.HasValue)
+                                                {
+                                                    <span class="ms-2">Carbs: @product.Carbohydrates100g.Value.ToString("F1")g</span>
+                                                }
+                                                @if (product.Proteins100g.HasValue)
+                                                {
+                                                    <span class="ms-2">Protein: @product.Proteins100g.Value.ToString("F1")g</span>
+                                                }
+                                            </p>
+                                        }
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                    </div>
+
+                    @if (searchResults.TotalPages > 1)
+                    {
+                        <nav aria-label="Search results pagination">
+                            <ul class="pagination justify-content-center">
+                                <li class="page-item @(currentPage == 1 ? "disabled" : "")">
+                                    <button class="page-link" @onclick="() => ChangePage(currentPage - 1)" disabled="@(currentPage == 1)">
+                                        Previous
+                                    </button>
+                                </li>
+
+                                @for (int i = Math.Max(1, currentPage - 2); i <= Math.Min(searchResults.TotalPages, currentPage + 2); i++)
+                                {
+                                    var pageNum = i; // Capture for lambda
+                                    <li class="page-item @(currentPage == pageNum ? "active" : "")">
+                                        <button class="page-link" @onclick="() => ChangePage(pageNum)">
+                                            @pageNum
+                                        </button>
+                                    </li>
+                                }
+
+                                <li class="page-item @(currentPage == searchResults.TotalPages ? "disabled" : "")">
+                                    <button class="page-link" @onclick="() => ChangePage(currentPage + 1)"
+                                            disabled="@(currentPage == searchResults.TotalPages)">
+                                        Next
+                                    </button>
+                                </li>
+                            </ul>
+                        </nav>
+                    }
+                }
+                else if (searchPerformed && !isSearching)
+                {
+                    <div class="alert alert-warning">
+                        <strong>No products found</strong>
+                        <p class="mb-0">No products matching "@searchText" were found in the database.</p>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <div class="card mt-3">
+            <div class="card-header">
+                <strong>Search Tips</strong>
+            </div>
+            <div class="card-body">
+                <ul class="small mb-0">
+                    <li><strong>Search by name:</strong> "coca cola", "oreo cookies"</li>
+                    <li><strong>Search by brand:</strong> "nestle", "kraft"</li>
+                    <li><strong>Search by barcode:</strong> "3017620422003", "0012345678"</li>
+                    <li><strong>Search by category:</strong> "snacks", "beverages", "dairy"</li>
+                    <li>Search is case-insensitive and matches partial words</li>
+                    <li>Database contains <strong>4.2 million</strong> products from Open Food Facts</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private string searchText = "";
+    private bool isSearching;
+    private bool searchPerformed;
+    private string? errorMessage;
+    private SearchProductsResult? searchResults;
+    private int currentPage = 1;
+    private const int PageSize = 20;
+
+    private async Task HandleKeyPress(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            currentPage = 1; // Reset to first page on new search
+            await PerformSearch();
+        }
+    }
+
+    private async Task PerformSearch()
+    {
+        if (string.IsNullOrWhiteSpace(searchText))
+            return;
+
+        isSearching = true;
+        searchPerformed = true;
+        errorMessage = null;
+        searchResults = null;
+
+        try
+        {
+            var query = new SearchProductsQuery(searchText.Trim(), currentPage, PageSize);
+            searchResults = await Mediator.Send(query);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error searching: {ex.Message}";
+        }
+        finally
+        {
+            isSearching = false;
+        }
+    }
+
+    private async Task ChangePage(int page)
+    {
+        if (page < 1 || (searchResults != null && page > searchResults.TotalPages))
+            return;
+
+        currentPage = page;
+        await PerformSearch();
+    }
+
+    private string TruncateText(string text, int maxLength)
+    {
+        if (string.IsNullOrEmpty(text) || text.Length <= maxLength)
+            return text;
+
+        return text.Substring(0, maxLength) + "...";
+    }
+}

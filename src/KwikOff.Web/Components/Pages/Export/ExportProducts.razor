@@ -1,0 +1,439 @@
+@page "/export"
+@rendermode InteractiveServer
+@using KwikOff.Web.Features.Products
+@using KwikOff.Web.Domain.Enums
+@using KwikOff.Web.Infrastructure.Services
+@inject IMediator Mediator
+@inject ICsvExporter CsvExporter
+@inject IJSRuntime JS
+
+<PageTitle>Export Results - KwikOff</PageTitle>
+
+<h1>Export Results</h1>
+<p>Export comparison results to CSV with customizable field selection.</p>
+
+<div class="row">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-body">
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label for="tenantId" class="form-label">Tenant ID</label>
+                        <input type="text" class="form-control" id="tenantId" @bind="tenantId" />
+                    </div>
+                    <div class="col-md-6">
+                        <label for="batchId" class="form-label">Import Batch (optional)</label>
+                        <select class="form-select" id="batchId" @bind="selectedBatchId" @bind:after="OnBatchSelected">
+                            <option value="">All batches</option>
+                            @foreach (var batch in availableBatches)
+                            {
+                                <option value="@batch.BatchId">
+                                    [@batch.TenantId] @(batch.FileName ?? "Unknown") - @batch.ProductCount products - @batch.ImportedAt.ToString("MMM d, yyyy h:mm tt")
+                                </option>
+                            }
+                        </select>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Filter by Match Status</label>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="statusFilter" id="statusAll"
+                               checked="@(statusFilter == null)" @onchange="() => statusFilter = null" />
+                        <label class="form-check-label" for="statusAll">All Results</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="statusFilter" id="statusMatched"
+                               checked="@(statusFilter == MatchStatus.Matched)" @onchange="() => statusFilter = MatchStatus.Matched" />
+                        <label class="form-check-label" for="statusMatched">Matched Only</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="statusFilter" id="statusDiscrepancy"
+                               checked="@(statusFilter == MatchStatus.Discrepancy)" @onchange="() => statusFilter = MatchStatus.Discrepancy" />
+                        <label class="form-check-label" for="statusDiscrepancy">Discrepancies Only</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="statusFilter" id="statusUnmatched"
+                               checked="@(statusFilter == MatchStatus.Unmatched)" @onchange="() => statusFilter = MatchStatus.Unmatched" />
+                        <label class="form-check-label" for="statusUnmatched">Not Found Only</label>
+                    </div>
+                </div>
+
+                <h5>Fields to Export</h5>
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6>Core Fields</h6>
+                        @foreach (var field in coreFields)
+                        {
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="@field.Key"
+                                       checked="@field.Selected" @onchange="() => field.Selected = !field.Selected" />
+                                <label class="form-check-label" for="@field.Key">@field.DisplayName</label>
+                            </div>
+                        }
+
+                        <h6 class="mt-3">Comparison Fields</h6>
+                        @foreach (var field in comparisonFields)
+                        {
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="@field.Key"
+                                       checked="@field.Selected" @onchange="() => field.Selected = !field.Selected" />
+                                <label class="form-check-label" for="@field.Key">@field.DisplayName</label>
+                            </div>
+                        }
+                    </div>
+                    <div class="col-md-6">
+                        <h6>Open Food Facts Fields</h6>
+                        <div class="form-check mb-2 bg-light p-2 rounded">
+                            <input class="form-check-input" type="checkbox" id="selectAllOff"
+                                   checked="@AreAllOffFieldsSelected" 
+                                   @onchange="ToggleAllOffFields" />
+                            <label class="form-check-label fw-bold" for="selectAllOff">
+                                Select All OFF Fields
+                            </label>
+                        </div>
+                        @foreach (var field in offFields)
+                        {
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="@field.Key"
+                                       checked="@field.Selected" @onchange="() => field.Selected = !field.Selected" />
+                                <label class="form-check-label" for="@field.Key">@field.DisplayName</label>
+                            </div>
+                        }
+
+                        <h6 class="mt-3">FSMA 204 Fields</h6>
+                        @foreach (var field in fsmaFields)
+                        {
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="@field.Key"
+                                       checked="@field.Selected" @onchange="() => field.Selected = !field.Selected" />
+                                <label class="form-check-label" for="@field.Key">
+                                    @field.DisplayName
+                                    <span class="badge bg-info">FSMA</span>
+                                </label>
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                <hr />
+
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <button class="btn btn-outline-secondary me-2" @onclick="SelectAll">Select All</button>
+                        <button class="btn btn-outline-secondary" @onclick="SelectNone">Select None</button>
+                    </div>
+                    <button class="btn btn-success" @onclick="ExportCsv" disabled="@isExporting">
+                        @if (isExporting)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1" role="status"></span>
+                        }
+                        Export to CSV
+                    </button>
+                </div>
+
+                @if (!string.IsNullOrEmpty(exportMessage))
+                {
+                    <div class="alert @(exportSuccess ? "alert-success" : "alert-danger") mt-3">
+                        @exportMessage
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <strong>Export Preview</strong>
+            </div>
+            <div class="card-body">
+                <p class="small mb-2">Selected fields: <strong>@SelectedFieldCount</strong></p>
+                <ul class="small mb-0">
+                    @foreach (var field in AllSelectedFields.Take(10))
+                    {
+                        <li>@field.DisplayName</li>
+                    }
+                    @if (AllSelectedFields.Count() > 10)
+                    {
+                        <li class="text-muted">+@(AllSelectedFields.Count() - 10) more fields</li>
+                    }
+                </ul>
+            </div>
+        </div>
+
+        <div class="card mt-3">
+            <div class="card-header">
+                <strong>FSMA 204 Compliance</strong>
+            </div>
+            <div class="card-body">
+                <p class="small">
+                    FSMA 204 requires tracking of critical tracking events (CTEs) for
+                    foods on the Food Traceability List.
+                </p>
+                <button class="btn btn-sm btn-info" @onclick="SelectFsmaFields">
+                    Select FSMA 204 Fields
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private string tenantId = "default";
+    private Guid? selectedBatchId;
+    private MatchStatus? statusFilter;
+    private bool isExporting;
+    private bool exportSuccess;
+    private string? exportMessage;
+
+    private List<ImportBatchSummary> availableBatches = new();
+
+    private List<ExportField> coreFields = new()
+    {
+        new("Barcode", "Barcode", true),
+        new("ProductName", "Product Name", true),
+        new("Brand", "Brand", true),
+        new("Category", "Category", true),
+        new("Price", "Price", false),
+        new("Description", "Description", false),
+        new("Supplier", "Supplier", false),
+        new("Allergens", "Allergens", false)
+    };
+
+    private List<ExportField> comparisonFields = new()
+    {
+        new("MatchStatus", "Match Status", true),
+        new("ConfidenceScore", "Confidence Score", true),
+        new("HasDiscrepancies", "Has Discrepancies", true),
+        new("Names_Match", "Product Names Match", false)
+    };
+
+    private List<ExportField> offFields = new()
+    {
+        // Basic Info
+        new("OFF_ProductName", "OFF Product Name", true),
+        new("OFF_GenericName", "OFF Generic Name", false),
+        new("OFF_Brands", "OFF Brands", false),
+        new("OFF_Quantity", "OFF Quantity", false),
+        
+        // Categories
+        new("OFF_Categories", "OFF Categories", false),
+        new("OFF_CategoriesTags", "OFF Categories Tags", false),
+        
+        // Ingredients & Allergens
+        new("OFF_IngredientsText", "OFF Ingredients", false),
+        new("OFF_Allergens", "OFF Allergens", false),
+        new("OFF_AllergensTags", "OFF Allergens Tags", false),
+        new("OFF_Traces", "OFF Traces", false),
+        new("OFF_TracesTags", "OFF Traces Tags", false),
+        
+        // Nutrition Scores
+        new("OFF_NutritionGrades", "OFF Nutrition Grade (A-E)", false),
+        new("OFF_NovaGroup", "OFF Nova Group (1-4)", false),
+        new("OFF_Ecoscore", "OFF Ecoscore (A-E)", false),
+        
+        // Nutritional Values (per 100g)
+        new("OFF_EnergyKcal100g", "OFF Energy (kcal/100g)", false),
+        new("OFF_Fat100g", "OFF Fat (g/100g)", false),
+        new("OFF_SaturatedFat100g", "OFF Saturated Fat (g/100g)", false),
+        new("OFF_Carbohydrates100g", "OFF Carbs (g/100g)", false),
+        new("OFF_Sugars100g", "OFF Sugars (g/100g)", false),
+        new("OFF_Fiber100g", "OFF Fiber (g/100g)", false),
+        new("OFF_Proteins100g", "OFF Proteins (g/100g)", false),
+        new("OFF_Salt100g", "OFF Salt (g/100g)", false),
+        new("OFF_Sodium100g", "OFF Sodium (g/100g)", false),
+        
+        // Serving Size
+        new("OFF_ServingSize", "OFF Serving Size", false),
+        new("OFF_ServingQuantity", "OFF Serving Quantity", false),
+        
+        // Labels & Certifications
+        new("OFF_Labels", "OFF Labels", false),
+        new("OFF_LabelsTags", "OFF Labels Tags", false),
+        
+        // Distribution
+        new("OFF_Stores", "OFF Stores", false),
+        new("OFF_Countries", "OFF Countries", false),
+        new("OFF_CountriesTags", "OFF Countries Tags", false),
+        
+        // Images (from database cache)
+        new("OFF_ImageUrl", "OFF Main Image URL", false),
+        new("OFF_ImageSmallUrl", "OFF Small Image URL", false),
+        new("OFF_ImageFrontUrl", "OFF Front Image URL", false),
+        new("OFF_ImageIngredientsUrl", "OFF Ingredients Image URL", false),
+        new("OFF_ImageNutritionUrl", "OFF Nutrition Image URL", false),
+        
+        // Packaging
+        new("OFF_Packaging", "OFF Packaging", false),
+        new("OFF_PackagingTags", "OFF Packaging Tags", false),
+        
+        // Origin & Manufacturing
+        new("OFF_Origins", "OFF Origins", false),
+        new("OFF_OriginsTags", "OFF Origins Tags", false),
+        new("OFF_ManufacturingPlaces", "OFF Manufacturing Places", false),
+        
+        // Metadata
+        new("OFF_Completeness", "OFF Data Completeness (%)", false),
+        new("OFF_CreatedAt", "OFF Created Date", false),
+        new("OFF_LastModified", "OFF Last Modified Date", false)
+    };
+
+    private List<ExportField> fsmaFields = new()
+    {
+        new("TraceabilityLotCode", "Traceability Lot Code", false)
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadBatches();
+    }
+
+    private async Task LoadBatches()
+    {
+        try
+        {
+            // Load ALL batches regardless of tenant ID
+            var query = new GetImportBatchesQuery(null, 1, 100);
+            var result = await Mediator.Send(query);
+            availableBatches = result.Items;
+        }
+        catch
+        {
+            availableBatches = new();
+        }
+    }
+
+    private void OnBatchSelected()
+    {
+        if (selectedBatchId.HasValue)
+        {
+            // Update tenant ID to match the selected batch
+            var selectedBatch = availableBatches.FirstOrDefault(b => b.BatchId == selectedBatchId.Value);
+            if (selectedBatch != null)
+            {
+                tenantId = selectedBatch.TenantId;
+            }
+        }
+    }
+
+    private void SelectAll()
+    {
+        coreFields.ForEach(f => f.Selected = true);
+        comparisonFields.ForEach(f => f.Selected = true);
+        offFields.ForEach(f => f.Selected = true);
+        fsmaFields.ForEach(f => f.Selected = true);
+    }
+
+    private void SelectNone()
+    {
+        coreFields.ForEach(f => f.Selected = false);
+        comparisonFields.ForEach(f => f.Selected = false);
+        offFields.ForEach(f => f.Selected = false);
+        fsmaFields.ForEach(f => f.Selected = false);
+    }
+
+    private void SelectFsmaFields()
+    {
+        fsmaFields.ForEach(f => f.Selected = true);
+    }
+
+    private bool AreAllOffFieldsSelected => offFields.All(f => f.Selected);
+
+    private void ToggleAllOffFields()
+    {
+        var newState = !AreAllOffFieldsSelected;
+        offFields.ForEach(f => f.Selected = newState);
+    }
+
+    private int SelectedFieldCount => AllSelectedFields.Count();
+
+    private IEnumerable<ExportField> AllSelectedFields =>
+        coreFields.Where(f => f.Selected)
+            .Concat(comparisonFields.Where(f => f.Selected))
+            .Concat(offFields.Where(f => f.Selected))
+            .Concat(fsmaFields.Where(f => f.Selected));
+
+    private async Task ExportCsv()
+    {
+        if (!AllSelectedFields.Any())
+        {
+            exportMessage = "Please select at least one field to export.";
+            exportSuccess = false;
+            return;
+        }
+
+        isExporting = true;
+        exportMessage = null;
+
+        try
+        {
+            var selectedFieldKeys = AllSelectedFields.Select(f => f.Key).ToList();
+
+            var csvBytes = await CsvExporter.ExportMatchedProductsAsync(
+                tenantId,
+                selectedBatchId,
+                statusFilter,
+                selectedFieldKeys,
+                false); // Never include images - too slow
+
+            await DownloadFile(csvBytes, $"kwikoff-export-{DateTime.Now:yyyyMMdd-HHmmss}.csv");
+
+            exportMessage = "Export completed successfully!";
+            exportSuccess = true;
+        }
+        catch (Exception ex)
+        {
+            exportMessage = $"Export failed: {ex.Message}";
+            exportSuccess = false;
+        }
+        finally
+        {
+            isExporting = false;
+        }
+    }
+
+    private async Task DownloadFile(byte[] content, string fileName)
+    {
+        // For large files, chunk the base64 encoding to avoid JSON size limits
+        const int chunkSize = 1024 * 1024 * 10; // 10MB chunks
+        
+        if (content.Length <= chunkSize)
+        {
+            // Small file - send directly
+        var base64 = Convert.ToBase64String(content);
+        await JS.InvokeVoidAsync("downloadFile", fileName, base64);
+        }
+        else
+        {
+            // Large file - send in chunks
+            await JS.InvokeVoidAsync("initLargeDownload", fileName);
+            
+            for (int i = 0; i < content.Length; i += chunkSize)
+            {
+                int currentChunkSize = Math.Min(chunkSize, content.Length - i);
+                byte[] chunk = new byte[currentChunkSize];
+                Array.Copy(content, i, chunk, 0, currentChunkSize);
+                
+                var base64Chunk = Convert.ToBase64String(chunk);
+                await JS.InvokeVoidAsync("appendChunk", base64Chunk);
+            }
+            
+            await JS.InvokeVoidAsync("finalizeDownload");
+        }
+    }
+
+    private class ExportField
+    {
+        public string Key { get; set; }
+        public string DisplayName { get; set; }
+        public bool Selected { get; set; }
+
+        public ExportField(string key, string displayName, bool selected)
+        {
+            Key = key;
+            DisplayName = displayName;
+            Selected = selected;
+        }
+    }
+}

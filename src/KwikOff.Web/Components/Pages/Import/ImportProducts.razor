@@ -1,0 +1,582 @@
+@page "/import"
+@rendermode InteractiveServer
+@using KwikOff.Web.Features.Products
+@using KwikOff.Web.Infrastructure.Services
+@using KwikOff.Web.Domain.ValueObjects
+@inject IColumnDetectionService ColumnDetectionService
+@inject IMediator Mediator
+
+<PageTitle>Import Products - KwikOff</PageTitle>
+
+<h1>Import Products</h1>
+<p>Upload a CSV or Excel file containing your product inventory.</p>
+
+<div class="row">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-body">
+                <div class="mb-3">
+                    <label for="tenantId" class="form-label">Tenant ID</label>
+                    <input type="text" class="form-control" id="tenantId" @bind="tenantId"
+                           placeholder="Enter your company/tenant ID" />
+                </div>
+
+                <div class="mb-3">
+                    <label for="fileUpload" class="form-label">Select File</label>
+                    <InputFile id="fileUpload" class="form-control" OnChange="HandleFileSelected"
+                               accept=".csv,.tsv,.xlsx,.xls" />
+                    <div class="form-text">Supported formats: CSV, TSV, Excel (.xlsx, .xls)</div>
+                </div>
+
+                @if (isLoading)
+                {
+                    <div class="d-flex align-items-center">
+                        <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                        <span>@loadingMessage</span>
+                    </div>
+                }
+
+                @if (detectionResult != null)
+                {
+                    <div class="alert @(detectionResult.HasRequiredFields ? "alert-success" : "alert-warning")">
+                        <strong>Column Detection Complete</strong>
+                        <p class="mb-0">
+                            Confidence: @(detectionResult.OverallConfidence.ToString("P0")) |
+                            @detectionResult.AllColumns.Count columns detected
+                        </p>
+                    </div>
+
+                    @if (detectionResult.Errors.Count > 0)
+                    {
+                        <div class="alert alert-danger">
+                            <strong>Errors:</strong>
+                            <ul class="mb-0">
+                                @foreach (var error in detectionResult.Errors)
+                                {
+                                    <li>@error</li>
+                                }
+                            </ul>
+                        </div>
+                    }
+
+                    @if (detectionResult.Warnings.Count > 0)
+                    {
+                        <div class="alert alert-warning">
+                            <strong>Warnings:</strong>
+                            <ul class="mb-0">
+                                @foreach (var warning in detectionResult.Warnings)
+                                {
+                                    <li>@warning</li>
+                                }
+                            </ul>
+                        </div>
+                    }
+
+                    <h5>Detected Column Mappings</h5>
+                    <p class="text-muted small">Review and adjust the column mappings below. You can manually override any incorrect detections.</p>
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>Source Column</th>
+                                <th>Map To Field</th>
+                                <th>Confidence</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var col in detectionResult.AllColumns)
+                            {
+                                <tr>
+                                    <td>@col.HeaderName</td>
+                                    <td>
+                                        <select class="form-select form-select-sm" 
+                                                @onchange="@(e => UpdateMapping(col.HeaderName, col.Index, e.Value?.ToString()))">
+                                            <option value="">-- Not Mapped --</option>
+                                            <optgroup label="Required Fields">
+                                                <option value="Barcode" selected="@IsFieldMapped(col, "Barcode")">Barcode/SKU</option>
+                                                <option value="ProductName" selected="@IsFieldMapped(col, "ProductName")">Product Name</option>
+                                            </optgroup>
+                                            <optgroup label="Recommended Fields">
+                                                <option value="Brand" selected="@IsFieldMapped(col, "Brand")">Brand/Manufacturer</option>
+                                                <option value="Category" selected="@IsFieldMapped(col, "Category")">Category</option>
+                                                <option value="Price" selected="@IsFieldMapped(col, "Price")">Price</option>
+                                            </optgroup>
+                                            <optgroup label="Optional Fields">
+                                                <option value="InternalSku" selected="@IsFieldMapped(col, "InternalSku")">Internal SKU</option>
+                                                <option value="Description" selected="@IsFieldMapped(col, "Description")">Description</option>
+                                                <option value="SalesPrice" selected="@IsFieldMapped(col, "SalesPrice")">Sales Price</option>
+                                                <option value="Supplier" selected="@IsFieldMapped(col, "Supplier")">Supplier</option>
+                                                <option value="Allergens" selected="@IsFieldMapped(col, "Allergens")">Allergens</option>
+                                                <option value="Quantity" selected="@IsFieldMapped(col, "Quantity")">Quantity</option>
+                                                <option value="UnitOfMeasure" selected="@IsFieldMapped(col, "UnitOfMeasure")">Unit of Measure</option>
+                                            </optgroup>
+                                            <optgroup label="FSMA 204 Fields">
+                                                <option value="TraceabilityLotCode" selected="@IsFieldMapped(col, "TraceabilityLotCode")">Traceability Lot Code</option>
+                                                <option value="OriginLocation" selected="@IsFieldMapped(col, "OriginLocation")">Origin Location</option>
+                                                <option value="CurrentLocation" selected="@IsFieldMapped(col, "CurrentLocation")">Current Location</option>
+                                                <option value="DestinationLocation" selected="@IsFieldMapped(col, "DestinationLocation")">Destination Location</option>
+                                                <option value="HarvestDate" selected="@IsFieldMapped(col, "HarvestDate")">Harvest Date</option>
+                                                <option value="PackDate" selected="@IsFieldMapped(col, "PackDate")">Pack Date</option>
+                                                <option value="ShipDate" selected="@IsFieldMapped(col, "ShipDate")">Ship Date</option>
+                                                <option value="ReceiveDate" selected="@IsFieldMapped(col, "ReceiveDate")">Receive Date</option>
+                                                <option value="ExpirationDate" selected="@IsFieldMapped(col, "ExpirationDate")">Expiration Date</option>
+                                                <option value="ReferenceDocumentType" selected="@IsFieldMapped(col, "ReferenceDocumentType")">Reference Document Type</option>
+                                                <option value="ReferenceDocumentNumber" selected="@IsFieldMapped(col, "ReferenceDocumentNumber")">Reference Document Number</option>
+                                            </optgroup>
+                                        </select>
+                                        @if (IsManualOverride(col.HeaderName))
+                                        {
+                                            <span class="badge bg-warning text-dark ms-1">Manual</span>
+                                        }
+                                    </td>
+                                    <td>
+                                        @if (col.BestConfidence > 0)
+                                        {
+                                            <span class="badge @GetConfidenceBadgeClass(col.BestConfidence)">
+                                                @col.BestConfidence.ToString("P0")
+                                            </span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+
+                    <div class="mb-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" @bind="saveMapping" id="saveMapping">
+                            <label class="form-check-label" for="saveMapping">
+                                Remember this mapping for future imports
+                            </label>
+                        </div>
+                    </div>
+
+                    <button class="btn btn-primary" @onclick="ExecuteImport"
+                            disabled="@(!IsValidForImport() || isImporting)">
+                        @if (isImporting)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1" role="status"></span>
+                        }
+                        Import Products
+                    </button>
+                }
+
+                @if (importResult != null)
+                {
+                    <div class="alert @(importResult.Success ? "alert-success" : "alert-danger") mt-3">
+                        <strong>@(importResult.Success ? "Import Complete!" : "Import Failed")</strong>
+                        <ul class="mb-0 mt-2">
+                            <li>Imported: @importResult.ImportedCount products</li>
+                            <li>Skipped: @importResult.SkippedCount rows</li>
+                            <li>Errors: @importResult.ErrorCount</li>
+                            <li>Duration: @importResult.Duration.TotalSeconds.ToString("F1")s</li>
+                        </ul>
+                        
+                        @if (importResult.Warnings.Count > 0)
+                        {
+                            <div class="alert alert-warning mt-2 mb-2">
+                                <strong>⚠️ Warnings:</strong>
+                                <ul class="mb-0 mt-1">
+                                    @foreach (var warning in importResult.Warnings)
+                                    {
+                                        <li class="small">@warning</li>
+                                    }
+                                </ul>
+                            </div>
+                        }
+                        
+                        @if (importResult.Success)
+                        {
+                            <a href="compare" class="btn btn-sm btn-success mt-2">Compare Now</a>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <strong>Import Tips</strong>
+            </div>
+            <div class="card-body">
+                <h6>Required Fields</h6>
+                <ul class="small">
+                    <li><strong>Barcode/SKU</strong> - Product identifier</li>
+                    <li><strong>Product Name</strong> - Item name</li>
+                </ul>
+
+                <h6>Recommended Fields</h6>
+                <ul class="small">
+                    <li>Brand/Manufacturer</li>
+                    <li>Category</li>
+                    <li>Price</li>
+                </ul>
+
+                <h6>FSMA 204 Fields</h6>
+                <ul class="small">
+                    <li>Traceability Lot Code</li>
+                    <li>Origin Location</li>
+                    <li>Harvest/Pack/Ship Dates</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private string tenantId = "default";
+    private bool isLoading;
+    private bool isImporting;
+    private string loadingMessage = "";
+    private bool saveMapping;
+    private ColumnDetectionResult? detectionResult;
+    private ImportProductsResult? importResult;
+    private IBrowserFile? selectedFile;
+    private MemoryStream? fileStream;
+
+    // Track manual overrides: sourceColumnName -> targetFieldName
+    private Dictionary<string, string?> manualOverrides = new();
+
+    private async Task HandleFileSelected(InputFileChangeEventArgs e)
+    {
+        selectedFile = e.File;
+        detectionResult = null;
+        importResult = null;
+        manualOverrides.Clear(); // Reset manual overrides on new file
+
+        if (selectedFile.Size > 100 * 1024 * 1024)
+        {
+            return;
+        }
+
+        isLoading = true;
+        loadingMessage = "Analyzing file structure...";
+
+        try
+        {
+            fileStream = new MemoryStream();
+            await selectedFile.OpenReadStream(maxAllowedSize: 100 * 1024 * 1024).CopyToAsync(fileStream);
+            fileStream.Position = 0;
+
+            detectionResult = await ColumnDetectionService.DetectColumnsAsync(
+                fileStream, selectedFile.Name, tenantId);
+
+            fileStream.Position = 0;
+        }
+        catch (Exception ex)
+        {
+            detectionResult = new ColumnDetectionResult
+            {
+                Errors = new List<string> { $"Error analyzing file: {ex.Message}" }
+            };
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private void UpdateMapping(string sourceColumn, int columnIndex, string? targetField)
+    {
+        manualOverrides[sourceColumn] = targetField;
+        
+        // Update the detectionResult.DetectedMapping
+        ApplyManualOverridesToMapping();
+        
+        // Re-validate to clear/show errors
+        ValidateMapping();
+    }
+
+    private void ApplyManualOverridesToMapping()
+    {
+        if (detectionResult == null) return;
+
+        foreach (var (sourceCol, targetField) in manualOverrides)
+        {
+            if (string.IsNullOrEmpty(targetField))
+            {
+                // User unmapped this column - clear it from DetectedMapping
+                ClearFieldFromMapping(sourceCol);
+            }
+            else
+            {
+                // User mapped this column - set it in DetectedMapping
+                var col = detectionResult.AllColumns.FirstOrDefault(c => c.HeaderName == sourceCol);
+                if (col != null)
+                {
+                    SetFieldInMapping(sourceCol, col.Index, targetField, isManual: true);
+                }
+            }
+        }
+    }
+
+    private void ClearFieldFromMapping(string sourceColumn)
+    {
+        if (detectionResult == null) return;
+
+        var mapping = detectionResult.DetectedMapping;
+        
+        // Check each property and clear if it matches this source column
+        if (mapping.Barcode?.ColumnName == sourceColumn) mapping.Barcode = null;
+        if (mapping.ProductName?.ColumnName == sourceColumn) mapping.ProductName = null;
+        if (mapping.Brand?.ColumnName == sourceColumn) mapping.Brand = null;
+        if (mapping.Category?.ColumnName == sourceColumn) mapping.Category = null;
+        if (mapping.Description?.ColumnName == sourceColumn) mapping.Description = null;
+        if (mapping.Price?.ColumnName == sourceColumn) mapping.Price = null;
+        if (mapping.SalesPrice?.ColumnName == sourceColumn) mapping.SalesPrice = null;
+        if (mapping.InternalSku?.ColumnName == sourceColumn) mapping.InternalSku = null;
+        if (mapping.Supplier?.ColumnName == sourceColumn) mapping.Supplier = null;
+        if (mapping.Allergens?.ColumnName == sourceColumn) mapping.Allergens = null;
+        if (mapping.Quantity?.ColumnName == sourceColumn) mapping.Quantity = null;
+        if (mapping.UnitOfMeasure?.ColumnName == sourceColumn) mapping.UnitOfMeasure = null;
+        if (mapping.TraceabilityLotCode?.ColumnName == sourceColumn) mapping.TraceabilityLotCode = null;
+        if (mapping.OriginLocation?.ColumnName == sourceColumn) mapping.OriginLocation = null;
+        if (mapping.CurrentLocation?.ColumnName == sourceColumn) mapping.CurrentLocation = null;
+        if (mapping.DestinationLocation?.ColumnName == sourceColumn) mapping.DestinationLocation = null;
+        if (mapping.HarvestDate?.ColumnName == sourceColumn) mapping.HarvestDate = null;
+        if (mapping.PackDate?.ColumnName == sourceColumn) mapping.PackDate = null;
+        if (mapping.ShipDate?.ColumnName == sourceColumn) mapping.ShipDate = null;
+        if (mapping.ReceiveDate?.ColumnName == sourceColumn) mapping.ReceiveDate = null;
+        if (mapping.ExpirationDate?.ColumnName == sourceColumn) mapping.ExpirationDate = null;
+        if (mapping.ReferenceDocumentType?.ColumnName == sourceColumn) mapping.ReferenceDocumentType = null;
+        if (mapping.ReferenceDocumentNumber?.ColumnName == sourceColumn) mapping.ReferenceDocumentNumber = null;
+    }
+
+    private void SetFieldInMapping(string sourceColumn, int columnIndex, string targetField, bool isManual)
+    {
+        if (detectionResult == null) return;
+
+        var mapInfo = new ColumnMapInfo
+        {
+            ColumnIndex = columnIndex,
+            ColumnName = sourceColumn,
+            Confidence = isManual ? 1.0 : 0.0, // Manual = 100% confidence
+            Reason = isManual ? "Manually set by user" : null,
+            IsManual = isManual
+        };
+
+        // First, clear this target field if it's already mapped to another column
+        ClearTargetFieldFromMapping(targetField);
+
+        // Then set the new mapping
+        var mapping = detectionResult.DetectedMapping;
+        switch (targetField)
+        {
+            case "Barcode":
+                mapping.Barcode = mapInfo;
+                break;
+            case "ProductName":
+                mapping.ProductName = mapInfo;
+                break;
+            case "Brand":
+                mapping.Brand = mapInfo;
+                break;
+            case "Category":
+                mapping.Category = mapInfo;
+                break;
+            case "Description":
+                mapping.Description = mapInfo;
+                break;
+            case "Price":
+                mapping.Price = mapInfo;
+                break;
+            case "SalesPrice":
+                mapping.SalesPrice = mapInfo;
+                break;
+            case "InternalSku":
+                mapping.InternalSku = mapInfo;
+                break;
+            case "Supplier":
+                mapping.Supplier = mapInfo;
+                break;
+            case "Allergens":
+                mapping.Allergens = mapInfo;
+                break;
+            case "Quantity":
+                mapping.Quantity = mapInfo;
+                break;
+            case "UnitOfMeasure":
+                mapping.UnitOfMeasure = mapInfo;
+                break;
+            case "TraceabilityLotCode":
+                mapping.TraceabilityLotCode = mapInfo;
+                break;
+            case "OriginLocation":
+                mapping.OriginLocation = mapInfo;
+                break;
+            case "CurrentLocation":
+                mapping.CurrentLocation = mapInfo;
+                break;
+            case "DestinationLocation":
+                mapping.DestinationLocation = mapInfo;
+                break;
+            case "HarvestDate":
+                mapping.HarvestDate = mapInfo;
+                break;
+            case "PackDate":
+                mapping.PackDate = mapInfo;
+                break;
+            case "ShipDate":
+                mapping.ShipDate = mapInfo;
+                break;
+            case "ReceiveDate":
+                mapping.ReceiveDate = mapInfo;
+                break;
+            case "ExpirationDate":
+                mapping.ExpirationDate = mapInfo;
+                break;
+            case "ReferenceDocumentType":
+                mapping.ReferenceDocumentType = mapInfo;
+                break;
+            case "ReferenceDocumentNumber":
+                mapping.ReferenceDocumentNumber = mapInfo;
+                break;
+        }
+    }
+
+    private void ClearTargetFieldFromMapping(string targetField)
+    {
+        if (detectionResult == null) return;
+
+        var mapping = detectionResult.DetectedMapping;
+        switch (targetField)
+        {
+            case "Barcode": mapping.Barcode = null; break;
+            case "ProductName": mapping.ProductName = null; break;
+            case "Brand": mapping.Brand = null; break;
+            case "Category": mapping.Category = null; break;
+            case "Description": mapping.Description = null; break;
+            case "Price": mapping.Price = null; break;
+            case "SalesPrice": mapping.SalesPrice = null; break;
+            case "InternalSku": mapping.InternalSku = null; break;
+            case "Supplier": mapping.Supplier = null; break;
+            case "Allergens": mapping.Allergens = null; break;
+            case "Quantity": mapping.Quantity = null; break;
+            case "UnitOfMeasure": mapping.UnitOfMeasure = null; break;
+            case "TraceabilityLotCode": mapping.TraceabilityLotCode = null; break;
+            case "OriginLocation": mapping.OriginLocation = null; break;
+            case "CurrentLocation": mapping.CurrentLocation = null; break;
+            case "DestinationLocation": mapping.DestinationLocation = null; break;
+            case "HarvestDate": mapping.HarvestDate = null; break;
+            case "PackDate": mapping.PackDate = null; break;
+            case "ShipDate": mapping.ShipDate = null; break;
+            case "ReceiveDate": mapping.ReceiveDate = null; break;
+            case "ExpirationDate": mapping.ExpirationDate = null; break;
+            case "ReferenceDocumentType": mapping.ReferenceDocumentType = null; break;
+            case "ReferenceDocumentNumber": mapping.ReferenceDocumentNumber = null; break;
+        }
+    }
+
+    private bool IsFieldMapped(DetectedColumn col, string fieldName)
+    {
+        // Check if this column is currently mapped to this field
+        return GetCurrentFieldMapping(col.HeaderName) == fieldName;
+    }
+
+    private string? GetCurrentFieldMapping(string columnName)
+    {
+        if (detectionResult == null) return null;
+
+        var mapping = detectionResult.DetectedMapping;
+
+        if (mapping.Barcode?.ColumnName == columnName) return "Barcode";
+        if (mapping.ProductName?.ColumnName == columnName) return "ProductName";
+        if (mapping.Brand?.ColumnName == columnName) return "Brand";
+        if (mapping.Category?.ColumnName == columnName) return "Category";
+        if (mapping.Description?.ColumnName == columnName) return "Description";
+        if (mapping.Price?.ColumnName == columnName) return "Price";
+        if (mapping.SalesPrice?.ColumnName == columnName) return "SalesPrice";
+        if (mapping.InternalSku?.ColumnName == columnName) return "InternalSku";
+        if (mapping.Supplier?.ColumnName == columnName) return "Supplier";
+        if (mapping.Allergens?.ColumnName == columnName) return "Allergens";
+        if (mapping.Quantity?.ColumnName == columnName) return "Quantity";
+        if (mapping.UnitOfMeasure?.ColumnName == columnName) return "UnitOfMeasure";
+        if (mapping.TraceabilityLotCode?.ColumnName == columnName) return "TraceabilityLotCode";
+        if (mapping.OriginLocation?.ColumnName == columnName) return "OriginLocation";
+        if (mapping.CurrentLocation?.ColumnName == columnName) return "CurrentLocation";
+        if (mapping.DestinationLocation?.ColumnName == columnName) return "DestinationLocation";
+        if (mapping.HarvestDate?.ColumnName == columnName) return "HarvestDate";
+        if (mapping.PackDate?.ColumnName == columnName) return "PackDate";
+        if (mapping.ShipDate?.ColumnName == columnName) return "ShipDate";
+        if (mapping.ReceiveDate?.ColumnName == columnName) return "ReceiveDate";
+        if (mapping.ExpirationDate?.ColumnName == columnName) return "ExpirationDate";
+        if (mapping.ReferenceDocumentType?.ColumnName == columnName) return "ReferenceDocumentType";
+        if (mapping.ReferenceDocumentNumber?.ColumnName == columnName) return "ReferenceDocumentNumber";
+
+        return null;
+    }
+
+    private bool IsManualOverride(string columnName)
+    {
+        return manualOverrides.ContainsKey(columnName);
+    }
+
+    private void ValidateMapping()
+    {
+        if (detectionResult == null) return;
+
+        detectionResult.Errors.Clear();
+        
+        // Check required fields
+        if (detectionResult.DetectedMapping.Barcode == null || 
+            detectionResult.DetectedMapping.Barcode.ColumnIndex < 0)
+        {
+            detectionResult.Errors.Add("Barcode/SKU field is required and must be mapped");
+        }
+        
+        if (detectionResult.DetectedMapping.ProductName == null || 
+            detectionResult.DetectedMapping.ProductName.ColumnIndex < 0)
+        {
+            detectionResult.Errors.Add("Product Name field is required and must be mapped");
+        }
+        
+        StateHasChanged(); // Refresh UI to show/hide error
+    }
+
+    private bool IsValidForImport()
+    {
+        return detectionResult?.HasRequiredFields == true && 
+               detectionResult.Errors.Count == 0;
+    }
+
+    private async Task ExecuteImport()
+    {
+        if (detectionResult == null || fileStream == null || selectedFile == null)
+            return;
+
+        isImporting = true;
+        fileStream.Position = 0;
+
+        try
+        {
+            var command = new ImportProductsWithMappingCommand(
+                fileStream,
+                selectedFile.Name,
+                tenantId,
+                detectionResult.DetectedMapping,
+                saveMapping);
+
+            importResult = await Mediator.Send(command);
+        }
+        catch (Exception ex)
+        {
+            importResult = new ImportProductsResult
+            {
+                Success = false,
+                Errors = new List<string> { ex.Message }
+            };
+        }
+        finally
+        {
+            isImporting = false;
+        }
+    }
+
+    private static string GetConfidenceBadgeClass(double confidence) => confidence switch
+    {
+        >= 0.9 => "bg-success",
+        >= 0.7 => "bg-warning text-dark",
+        _ => "bg-danger"
+    };
+}

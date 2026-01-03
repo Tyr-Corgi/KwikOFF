@@ -1,0 +1,290 @@
+@page "/database"
+@rendermode InteractiveServer
+@using KwikOff.Web.Features.Database
+@using KwikOff.Web.Domain.Entities
+@inject IMediator Mediator
+@implements IDisposable
+
+<PageTitle>Database Sync - KwikOff</PageTitle>
+
+<h1>Database Sync</h1>
+<p>Sync with the Open Food Facts database for offline matching.</p>
+
+<div class="row">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <strong>Sync Status</strong>
+            </div>
+            <div class="card-body">
+                @if (isLoading)
+                {
+                    <div class="d-flex align-items-center">
+                        <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                        <span>Loading sync status...</span>
+                    </div>
+                }
+                else
+                {
+                    <div class="row mb-4">
+                        <div class="col-md-4 text-center">
+                            <h2 class="mb-0">@localProductCount.ToString("N0")</h2>
+                            <p class="text-muted">Local Products</p>
+                        </div>
+                        <div class="col-md-4 text-center">
+                            <h2 class="mb-0">~3M+</h2>
+                            <p class="text-muted">OFF Database</p>
+                        </div>
+                        <div class="col-md-4 text-center">
+                            <h2 class="mb-0 @(syncStatus?.IsSyncing == true ? "text-warning" : syncStatus?.LastSyncCompleted.HasValue == true ? "text-success" : "text-muted")">
+                                @(syncStatus?.IsSyncing == true ? "Running" : syncStatus?.LastSyncCompleted.HasValue == true ? "Synced" : "Never")
+                            </h2>
+                            <p class="text-muted">Status</p>
+                        </div>
+                    </div>
+
+                    @if (syncStatus?.IsSyncing == true)
+                    {
+                        <div class="alert alert-warning">
+                            <div class="d-flex align-items-center mb-2">
+                                <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                                <strong>Sync in progress...</strong>
+                            </div>
+                            
+                            @* Progress Bar *@
+                            @if (syncStatus.ProgressPercentage > 0)
+                            {
+                                <div class="mb-3">
+                                    <div class="d-flex justify-content-between mb-1">
+                                        <span class="small">Progress</span>
+                                        <span class="small fw-bold">@syncStatus.ProgressPercentage%</span>
+                                    </div>
+                                    <div class="progress" style="height: 25px;">
+                                        <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                                             role="progressbar" 
+                                             style="width: @(syncStatus.ProgressPercentage)%"
+                                             aria-valuenow="@syncStatus.ProgressPercentage" 
+                                             aria-valuemin="0" 
+                                             aria-valuemax="100">
+                                            @syncStatus.ProgressPercentage%
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                            
+                            @* Download Progress *@
+                            @if (syncStatus.DownloadedBytes.HasValue && syncStatus.TotalBytes.HasValue && syncStatus.TotalBytes > 0)
+                            {
+                                var downloadProgress = (double)syncStatus.DownloadedBytes.Value / syncStatus.TotalBytes.Value * 100;
+                                var downloadedMB = syncStatus.DownloadedBytes.Value / 1024.0 / 1024.0;
+                                var totalMB = syncStatus.TotalBytes.Value / 1024.0 / 1024.0;
+                                
+                                <p class="small mb-1">
+                                    <strong>Download:</strong> @downloadedMB.ToString("N1") MB / @totalMB.ToString("N1") MB (@downloadProgress.ToString("N1")%)
+                                </p>
+                            }
+                            
+                            @* Products Synced Count *@
+                            @if (syncStatus.TotalProductsSynced > 0)
+                            {
+                                <p class="small mb-1">
+                                    <strong>Products synced:</strong> @syncStatus.TotalProductsSynced.ToString("N0")
+                                </p>
+                            }
+                            
+                            @* Status Message *@
+                            @if (!string.IsNullOrEmpty(syncStatus.StatusMessage))
+                            {
+                                <p class="small mb-0">
+                                    <em>@syncStatus.StatusMessage</em>
+                                </p>
+                            }
+                        </div>
+                    }
+                    else if (syncStatus?.LastSyncCompleted.HasValue == true)
+                    {
+                        <div class="alert alert-success">
+                            <strong>Last sync:</strong> @syncStatus.LastSyncCompleted.Value.ToString("yyyy-MM-dd HH:mm:ss")
+                            @if (syncStatus.LastSyncStarted.HasValue)
+                            {
+                                var duration = syncStatus.LastSyncCompleted.Value - syncStatus.LastSyncStarted.Value;
+                                <span> (Duration: @duration.ToString(@"hh\:mm\:ss"))</span>
+                            }
+                        </div>
+                    }
+
+                    @if (!string.IsNullOrEmpty(syncStatus?.LastError))
+                    {
+                        <div class="alert alert-danger">
+                            <strong>Last Error:</strong> @syncStatus.LastError
+                        </div>
+                    }
+
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-primary" @onclick="StartSync" disabled="@(syncStatus?.IsSyncing == true || isStarting)">
+                            @if (isStarting)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1" role="status"></span>
+                            }
+                            Start Full Sync
+                        </button>
+                        <button class="btn btn-outline-secondary" @onclick="RefreshStatus">
+                            Refresh Status
+                        </button>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <div class="card mt-3">
+            <div class="card-header">
+                <strong>Database Statistics</strong>
+            </div>
+            <div class="card-body">
+                <table class="table table-sm">
+                    <tbody>
+                        <tr>
+                            <td>Open Food Facts Products</td>
+                            <td class="text-end">@localProductCount.ToString("N0")</td>
+                        </tr>
+                        <tr>
+                            <td>Products with Images</td>
+                            <td class="text-end">@productsWithImages.ToString("N0")</td>
+                        </tr>
+                        <tr>
+                            <td>Products with Nutrition Data</td>
+                            <td class="text-end">@productsWithNutrition.ToString("N0")</td>
+                        </tr>
+                        <tr>
+                            <td>Total Synced</td>
+                            <td class="text-end">@(syncStatus?.TotalProductsSynced.ToString("N0") ?? "—")</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <strong>About Database Sync</strong>
+            </div>
+            <div class="card-body">
+                <p class="small">
+                    The Open Food Facts database contains over 3 million products
+                    with nutrition data, ingredients, allergens, and more.
+                </p>
+                <h6>Sync Process</h6>
+                <ol class="small">
+                    <li>Download compressed JSONL file (~2GB)</li>
+                    <li>Stream and decompress data</li>
+                    <li>Batch insert into PostgreSQL</li>
+                    <li>Build search indexes</li>
+                </ol>
+                <div class="alert alert-info small mb-0">
+                    <strong>Note:</strong> Full sync may take 1-3 hours depending on
+                    your internet connection and server performance.
+                </div>
+            </div>
+        </div>
+
+        <div class="card mt-3">
+            <div class="card-header">
+                <strong>Data Sources</strong>
+            </div>
+            <div class="card-body">
+                <ul class="small mb-0">
+                    <li>
+                        <a href="https://world.openfoodfacts.org/data" target="_blank">
+                            Open Food Facts Data Exports
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://world.openfoodfacts.org/api" target="_blank">
+                            Open Food Facts API
+                        </a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private SyncStatus? syncStatus;
+    private bool isLoading = true;
+    private bool isStarting;
+    private int localProductCount;
+    private int productsWithImages;
+    private int productsWithNutrition;
+    private Timer? refreshTimer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshStatus();
+
+        // Auto-refresh every 5 seconds when sync is running
+        refreshTimer = new Timer(async _ =>
+        {
+            if (syncStatus?.IsSyncing == true)
+            {
+                await InvokeAsync(async () =>
+                {
+                    await RefreshStatus();
+                    StateHasChanged();
+                });
+            }
+        }, null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+    }
+
+    private async Task RefreshStatus()
+    {
+        isLoading = true;
+        try
+        {
+            var query = new GetSyncStatusQuery();
+            syncStatus = await Mediator.Send(query);
+
+            // Get product counts using MediatR (avoids DbContext concurrency issues)
+            var statsQuery = new GetDatabaseStatsQuery();
+            var stats = await Mediator.Send(statsQuery);
+            localProductCount = stats.TotalProducts;
+            productsWithImages = stats.ProductsWithImages;
+            productsWithNutrition = stats.ProductsWithNutrition;
+        }
+        catch (Exception ex)
+        {
+            syncStatus = new SyncStatus
+            {
+                SourceName = "openfoodfacts",
+                LastError = ex.Message
+            };
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task StartSync()
+    {
+        isStarting = true;
+
+        try
+        {
+            var command = new StartDatabaseSyncCommand();
+            await Mediator.Send(command);
+            await RefreshStatus();
+        }
+        finally
+        {
+            isStarting = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        refreshTimer?.Dispose();
+    }
+}

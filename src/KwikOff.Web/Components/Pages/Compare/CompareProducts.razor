@@ -1,0 +1,587 @@
+@page "/compare"
+@rendermode InteractiveServer
+@using KwikOff.Web.Features.Products
+@using KwikOff.Web.Features.Comparison
+@using KwikOff.Web.Domain.Enums
+@inject IMediator Mediator
+
+<PageTitle>Compare Products - KwikOff</PageTitle>
+
+<h1>Compare Products</h1>
+<p>Compare your imported products against the Open Food Facts database.</p>
+
+@if (!string.IsNullOrEmpty(errorMessage))
+{
+    <div class="alert alert-danger alert-dismissible fade show" role="alert">
+        <h4 class="alert-heading">❌ Error!</h4>
+        <p><strong>@errorMessage</strong></p>
+        @if (!string.IsNullOrEmpty(errorDetails))
+        {
+            <hr>
+            <pre class="mb-0" style="white-space: pre-wrap; font-size: 0.875rem;">@errorDetails</pre>
+        }
+        <button type="button" class="btn-close" @onclick="() => { errorMessage = null; errorDetails = null; }"></button>
+    </div>
+}
+
+@if (isComparing)
+{
+    <div class="alert alert-info">
+        <div class="d-flex align-items-center">
+            <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+            <strong>Comparing products... This may take a few moments.</strong>
+        </div>
+    </div>
+}
+
+<div class="row mb-3">
+    <div class="col-md-9">
+        <label for="batchId" class="form-label">Import Batch</label>
+        <select class="form-select" id="batchId" @bind="selectedBatchId" @bind:after="OnBatchSelected">
+            @if (availableBatches.Count == 0)
+            {
+                <option value="">No imports found</option>
+            }
+            else
+            {
+                <option value="">Select a batch to compare...</option>
+                @foreach (var batch in availableBatches)
+                {
+                    <option value="@batch.BatchId">
+                        @(batch.FileName ?? "Unknown file") - @batch.ProductCount products - @batch.ImportedAt.ToString("MMM d, yyyy h:mm tt")
+                    </option>
+                }
+            }
+        </select>
+        <div class="form-text">Select which import to compare against Open Food Facts - All products will be compared</div>
+    </div>
+    <div class="col-md-3 d-flex align-items-end gap-2">
+        <button class="btn btn-primary" @onclick="StartComparison" disabled="@(isComparing || !selectedBatchId.HasValue)">
+            @if (isComparing)
+            {
+                <span class="spinner-border spinner-border-sm me-1" role="status"></span>
+            }
+            Compare Products
+        </button>
+        <button class="btn btn-outline-secondary" @onclick="LoadBatches">
+            Refresh Batches
+        </button>
+    </div>
+</div>
+
+<div class="row mb-3">
+    <div class="col-md-6">
+        <label for="searchFilter" class="form-label">Search/Filter Products</label>
+        <div class="input-group">
+            <input type="text" class="form-control" id="searchFilter" @bind="searchFilter" @bind:event="oninput" 
+                   placeholder="Search by barcode, product name, or brand..." />
+            <button class="btn btn-outline-primary" @onclick="PreviewFilter" disabled="@(!selectedBatchId.HasValue)">
+                Preview
+            </button>
+        </div>
+        <div class="form-text">
+            Filter imported products before comparing
+            @if (filterPreviewCount.HasValue)
+            {
+                <span class="badge bg-info ms-2">@filterPreviewCount products match your filter</span>
+            }
+        </div>
+    </div>
+</div>
+
+@if (comparisonSummary != null)
+{
+    <div class="row mb-3">
+        <div class="col-md-3">
+            <div class="card text-center">
+                <div class="card-body">
+                    <h2 class="mb-0">@comparisonSummary.TotalProducts</h2>
+                    <p class="text-muted mb-0">Total Compared</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-center bg-success text-white">
+                <div class="card-body">
+                    <h2 class="mb-0">@comparisonSummary.MatchedCount</h2>
+                    <p class="mb-0">Matched</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-center bg-warning">
+                <div class="card-body">
+                    <h2 class="mb-0">@comparisonSummary.DiscrepancyCount</h2>
+                    <p class="mb-0">Discrepancies</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-center bg-secondary text-white">
+                <div class="card-body">
+                    <h2 class="mb-0">@comparisonSummary.UnmatchedCount</h2>
+                    <p class="mb-0">Not Found</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="alert alert-info">
+        <strong>Match Rate:</strong> @comparisonSummary.MatchRate.ToString("P1") |
+        <strong>Duration:</strong> @comparisonSummary.Duration.TotalSeconds.ToString("F1")s
+    </div>
+}
+
+@if (comparisonResults != null)
+{
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <strong>Comparison Results</strong>
+            <div>
+                <div class="btn-group btn-group-sm" role="group">
+                    <input type="radio" class="btn-check" name="filter" id="filterAll"
+                           checked="@(filter == null)" @onchange="() => SetFilter(null)" />
+                    <label class="btn btn-outline-primary" for="filterAll">All</label>
+
+                    <input type="radio" class="btn-check" name="filter" id="filterMatched"
+                           checked="@(filter == MatchStatus.Matched)" @onchange="() => SetFilter(MatchStatus.Matched)" />
+                    <label class="btn btn-outline-success" for="filterMatched">Matched</label>
+
+                    <input type="radio" class="btn-check" name="filter" id="filterDiscrepancies"
+                           checked="@(filter == MatchStatus.Discrepancy)" @onchange="() => SetFilter(MatchStatus.Discrepancy)" />
+                    <label class="btn btn-outline-warning" for="filterDiscrepancies">Discrepancies</label>
+
+                    <input type="radio" class="btn-check" name="filter" id="filterNotFound"
+                           checked="@(filter == MatchStatus.Unmatched)" @onchange="() => SetFilter(MatchStatus.Unmatched)" />
+                    <label class="btn btn-outline-secondary" for="filterNotFound">Not Found</label>
+                </div>
+            </div>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th style="width: 10%;">Barcode</th>
+                            <th style="width: 22%;">Your Product</th>
+                            <th style="width: 22%;">OFF Product</th>
+                            <th style="width: 10%;">Status</th>
+                            <th style="width: 8%;">Confidence</th>
+                            <th style="width: 28%;">Discrepancy Details</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var result in comparisonResults.Items)
+                        {
+                            <tr>
+                                <td><code>@result.Barcode</code></td>
+                                <td>
+                                    @result.ProductName
+                                    @if (!string.IsNullOrEmpty(result.Brand))
+                                    {
+                                        <br /><small class="text-muted">@result.Brand</small>
+                                    }
+                                </td>
+                                <td>
+                                    @if (result.MatchStatus != MatchStatus.Unmatched)
+                                    {
+                                        @result.OffProductName
+                                        @if (!string.IsNullOrEmpty(result.OffBrand))
+                                        {
+                                            <br /><small class="text-muted">@result.OffBrand</small>
+                                        }
+                                        
+                                        @* Show info badge if names differ but barcode matched 100% *@
+                                        @if (result.ConfidenceScore >= 1.0 && 
+                                             !string.IsNullOrEmpty(result.ProductName) &&
+                                             !string.IsNullOrEmpty(result.OffProductName) &&
+                                             !string.Equals(result.ProductName, result.OffProductName, StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            <br />
+                                            <span class="badge bg-info text-dark small mt-1">
+                                                <i class="bi bi-info-circle"></i> Name variation
+                                            </span>
+                                        }
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted">Not found</span>
+                                    }
+                                </td>
+                                <td>
+                                    @switch (result.MatchStatus)
+                                    {
+                                        case MatchStatus.Matched:
+                                            <span class="badge bg-success">Match</span>
+                                            @if (result.UsedSecondarySearch)
+                                            {
+                                                <br />
+                                                <small class="text-muted">🔍 Secondary</small>
+                                            }
+                                            break;
+                                        case MatchStatus.Discrepancy:
+                                            <span class="badge bg-warning text-dark">Discrepancy</span>
+                                            @if (result.UsedSecondarySearch)
+                                            {
+                                                <br />
+                                                <small class="text-muted">🔍 Secondary</small>
+                                            }
+                                            break;
+                                        case MatchStatus.Unmatched:
+                                            <span class="badge bg-secondary">Not Found</span>
+                                            break;
+                                        case MatchStatus.Error:
+                                            <span class="badge bg-danger">Error</span>
+                                            break;
+                                    }
+                                    @if (!string.IsNullOrEmpty(result.MatchMethod))
+                                    {
+                                        <br />
+                                        <small class="text-muted">@result.MatchMethod</small>
+                                    }
+                                </td>
+                                <td>
+                                    <span class="badge @GetConfidenceBadgeClass(result.ConfidenceScore)">
+                                        @result.ConfidenceScore.ToString("P0")
+                                    </span>
+                                </td>
+                                <td>
+                                    @if (result.MatchStatus == MatchStatus.Discrepancy && result.DiscrepancyDetails.Any())
+                                    {
+                                        @* Show actual discrepancies (non-barcode matches with confidence < 100%) *@
+                                        <div class="small">
+                                            @foreach (var detail in result.DiscrepancyDetails)
+                                            {
+                                                <div class="mb-2 p-2 bg-light rounded">
+                                                    <strong class="text-danger">⚠️ @detail.FieldName:</strong>
+                                                    <div class="mt-1">
+                                                        <span class="badge bg-secondary me-1">Yours:</span>
+                                                        <span>@(detail.ImportedValue ?? "N/A")</span>
+                                                    </div>
+                                                    <div class="mt-1">
+                                                        <span class="badge bg-info me-1">OFF:</span>
+                                                        @if (!string.IsNullOrEmpty(result.OffBarcode))
+                                                        {
+                                                            <a href="https://world.openfoodfacts.org/product/@result.OffBarcode" 
+                                                               target="_blank" 
+                                                               rel="noopener noreferrer"
+                                                               class="text-decoration-none"
+                                                               title="View on OpenFoodFacts (opens in new tab)">
+                                                                <span>@(detail.OpenFoodFactsValue ?? "N/A")</span>
+                                                                <i class="bi bi-box-arrow-up-right ms-1" style="font-size: 0.8em;"></i>
+                                                            </a>
+                                                        }
+                                                        else
+                                                        {
+                                                            <span>@(detail.OpenFoodFactsValue ?? "N/A")</span>
+                                                        }
+                                                    </div>
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+                                    else if (result.MatchStatus == MatchStatus.Matched && result.ConfidenceScore >= 1.0)
+                                    {
+                                        @* Show informational differences for 100% barcode matches *@
+                                        @if (HasInformationalDifferences(result))
+                                        {
+                                            <div class="small text-muted">
+                                                <details>
+                                                    <summary class="cursor-pointer" style="cursor: pointer;">
+                                                        <i class="bi bi-info-circle"></i> View name variations
+                                                    </summary>
+                                                    <div class="mt-2 p-2 bg-light rounded">
+                                                        <div><strong>Your name:</strong> @result.ProductName</div>
+                                                        <div><strong>OFF name:</strong> @result.OffProductName</div>
+                                                        <div class="text-success mt-1">
+                                                            ✅ Same product - names differ due to data source variations
+                                                        </div>
+                                                    </div>
+                                                </details>
+                                            </div>
+                                        }
+                                        else
+                                        {
+                                            <div class="small text-success">
+                                                <i class="bi bi-check-circle"></i> Perfect match
+                                            </div>
+                                        }
+                                        @if (result.UsedSecondarySearch && !string.IsNullOrEmpty(result.SecondarySearchMethod))
+                                        {
+                                            <br />
+                                            <span class="badge bg-info text-dark mt-1">
+                                                <i class="bi bi-search"></i> Found via: @result.SecondarySearchMethod
+                                            </span>
+                                        }
+                                        @if (!string.IsNullOrEmpty(result.OffBarcode))
+                                        {
+                                            <br />
+                                            <a href="https://world.openfoodfacts.org/product/@result.OffBarcode" 
+                                               target="_blank" 
+                                               rel="noopener noreferrer"
+                                               class="text-decoration-none mt-1 d-inline-block"
+                                               title="View on OpenFoodFacts (opens in new tab)">
+                                                View on OpenFoodFacts <i class="bi bi-box-arrow-up-right ms-1"></i>
+                                            </a>
+                                        }
+                                    }
+                                    else if (result.MatchStatus == MatchStatus.Matched && !string.IsNullOrEmpty(result.MatchReason))
+                                    {
+                                        @* Other matched products (confidence < 100%) *@
+                                        <div class="small text-success">
+                                            <i class="bi bi-check-circle"></i> @result.MatchReason
+                                            @if (result.UsedSecondarySearch && !string.IsNullOrEmpty(result.SecondarySearchMethod))
+                                            {
+                                                <br />
+                                                <span class="badge bg-info text-dark mt-1">
+                                                    <i class="bi bi-search"></i> Found via: @result.SecondarySearchMethod
+                                                </span>
+                                            }
+                                            @if (!string.IsNullOrEmpty(result.OffBarcode))
+                                            {
+                                                <br />
+                                                <a href="https://world.openfoodfacts.org/product/@result.OffBarcode" 
+                                                   target="_blank" 
+                                                   rel="noopener noreferrer"
+                                                   class="text-decoration-none mt-1 d-inline-block"
+                                                   title="View on OpenFoodFacts (opens in new tab)">
+                                                    View on OpenFoodFacts <i class="bi bi-box-arrow-up-right ms-1"></i>
+                                                </a>
+                                            }
+                                        </div>
+                                    }
+                                    else if (result.MatchStatus == MatchStatus.Unmatched && !string.IsNullOrEmpty(result.MatchReason))
+                                    {
+                                        <div class="small text-muted">
+                                            <i class="bi bi-info-circle"></i> @result.MatchReason
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted small">—</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        @if (comparisonResults.TotalPages > 1)
+        {
+            <div class="card-footer">
+                <nav>
+                    <ul class="pagination pagination-sm mb-0 justify-content-center">
+                        <li class="page-item @(comparisonResults.HasPreviousPage ? "" : "disabled")">
+                            <a class="page-link" href="javascript:void(0)" @onclick="() => LoadPage(currentPage - 1)">Previous</a>
+                        </li>
+                        @for (var i = 1; i <= Math.Min(comparisonResults.TotalPages, 5); i++)
+                        {
+                            var pageNum = i;
+                            <li class="page-item @(pageNum == currentPage ? "active" : "")">
+                                <a class="page-link" href="javascript:void(0)" @onclick="() => LoadPage(pageNum)">@pageNum</a>
+                            </li>
+                        }
+                        <li class="page-item @(comparisonResults.HasNextPage ? "" : "disabled")">
+                            <a class="page-link" href="javascript:void(0)" @onclick="() => LoadPage(currentPage + 1)">Next</a>
+                        </li>
+                    </ul>
+                </nav>
+            </div>
+        }
+    </div>
+
+    <div class="mt-3">
+        <a href="export" class="btn btn-success">Export Results</a>
+    </div>
+}
+else if (!isComparing && availableBatches.Count == 0)
+{
+    <div class="alert alert-info">
+        <strong>No imported products found</strong>
+        <p class="mb-0">Import products first to compare them against Open Food Facts.</p>
+        <a href="import" class="btn btn-primary mt-2">Import Products</a>
+    </div>
+}
+
+@code {
+    private string tenantId = "default";
+    private Guid? selectedBatchId;
+    private MatchStatus? filter;
+    private bool isComparing;
+    private int currentPage = 1;
+    private string searchFilter = "";
+    private int? filterPreviewCount;
+    private List<ImportBatchSummary> availableBatches = new();
+    private ComparisonSummary? comparisonSummary;
+    private ComparisonResultsPage? comparisonResults;
+    private string? errorMessage;
+    private string? errorDetails;
+
+    private ImportBatchSummary? selectedBatch => selectedBatchId.HasValue
+        ? availableBatches.FirstOrDefault(b => b.BatchId == selectedBatchId.Value)
+        : availableBatches.FirstOrDefault();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadBatches();
+    }
+
+    private async Task LoadBatches()
+    {
+        try
+        {
+            // Load ALL batches regardless of tenant ID
+            var query = new GetImportBatchesQuery(null, 1, 100);
+            var result = await Mediator.Send(query);
+            availableBatches = result.Items;
+            errorMessage = null;
+            errorDetails = null;
+        }
+        catch (Exception ex)
+        {
+            availableBatches = new();
+            errorMessage = "Failed to load import batches";
+            errorDetails = $"Message: {ex.Message}\n\nStack Trace:\n{ex.StackTrace}";
+        }
+    }
+
+    private void OnBatchSelected()
+    {
+        if (selectedBatchId.HasValue)
+        {
+            // Update tenant ID to match the selected batch
+            var selectedBatch = availableBatches.FirstOrDefault(b => b.BatchId == selectedBatchId.Value);
+            if (selectedBatch != null)
+            {
+                tenantId = selectedBatch.TenantId;
+            }
+        }
+    }
+
+    private async Task PreviewFilter()
+    {
+        if (!selectedBatchId.HasValue) return;
+
+        var query = new CountFilteredProductsQuery(
+            selectedBatchId.Value,
+            tenantId,
+            string.IsNullOrWhiteSpace(searchFilter) ? null : searchFilter);
+
+        filterPreviewCount = await Mediator.Send(query);
+    }
+
+    private async Task StartComparison()
+    {
+        Console.WriteLine($"[DEBUG] StartComparison called. selectedBatchId: {selectedBatchId}, tenantId: {tenantId}");
+        
+        // Clear any previous errors
+        errorMessage = null;
+        errorDetails = null;
+        
+        if (!selectedBatchId.HasValue)
+        {
+            Console.WriteLine("[DEBUG] No batch selected, returning early");
+            errorMessage = "No batch selected";
+            errorDetails = "Please select an import batch from the dropdown before clicking Compare.";
+            return;
+        }
+
+        Console.WriteLine($"[DEBUG] Starting comparison for batch {selectedBatchId.Value}");
+        isComparing = true;
+        comparisonSummary = null;
+        comparisonResults = null;
+
+        try
+        {
+            Console.WriteLine("[DEBUG] Creating CompareProductsCommand");
+            var command = new CompareProductsCommand(
+                selectedBatchId.Value, 
+                tenantId, 
+                int.MaxValue, // Compare all products in the batch
+                string.IsNullOrWhiteSpace(searchFilter) ? null : searchFilter);
+            
+            Console.WriteLine("[DEBUG] Sending command via MediatR");
+            comparisonSummary = await Mediator.Send(command);
+            
+            Console.WriteLine($"[DEBUG] Comparison complete. Results: {comparisonSummary?.TotalProducts} products");
+
+            if (comparisonSummary == null)
+            {
+                throw new InvalidOperationException("Comparison returned null result");
+            }
+
+            await LoadResults();
+            Console.WriteLine("[DEBUG] Results loaded successfully");
+            
+            // Success message
+            errorMessage = null;
+            errorDetails = null;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DEBUG] Error during comparison: {ex.Message}");
+            Console.WriteLine($"[DEBUG] Stack trace: {ex.StackTrace}");
+            
+            // Display error in UI
+            errorMessage = $"Comparison failed: {ex.GetType().Name}";
+            errorDetails = $"Message: {ex.Message}\n\nStack Trace:\n{ex.StackTrace}";
+            
+            if (ex.InnerException != null)
+            {
+                errorDetails += $"\n\nInner Exception: {ex.InnerException.GetType().Name}\nMessage: {ex.InnerException.Message}\nStack Trace:\n{ex.InnerException.StackTrace}";
+            }
+        }
+        finally
+        {
+            isComparing = false;
+            Console.WriteLine("[DEBUG] isComparing set to false");
+        }
+    }
+
+    private async Task LoadResults()
+    {
+        try
+        {
+            var query = new GetComparisonResultsQuery(
+                tenantId,
+                selectedBatchId,
+                filter,
+                currentPage,
+                20);
+            comparisonResults = await Mediator.Send(query);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = "Failed to load comparison results";
+            errorDetails = $"Message: {ex.Message}\n\nStack Trace:\n{ex.StackTrace}";
+        }
+    }
+
+    private async Task SetFilter(MatchStatus? newFilter)
+    {
+        filter = newFilter;
+        currentPage = 1;
+        await LoadResults();
+    }
+
+    private async Task LoadPage(int page)
+    {
+        currentPage = page;
+        await LoadResults();
+    }
+
+    private static string GetConfidenceBadgeClass(double confidence) => confidence switch
+    {
+        >= 0.9 => "bg-success",
+        >= 0.7 => "bg-warning text-dark",
+        _ => "bg-danger"
+    };
+
+    private bool HasInformationalDifferences(ComparisonResultDto result)
+    {
+        return !string.IsNullOrEmpty(result.ProductName) &&
+               !string.IsNullOrEmpty(result.OffProductName) &&
+               !string.Equals(result.ProductName, result.OffProductName, StringComparison.OrdinalIgnoreCase);
+    }
+}

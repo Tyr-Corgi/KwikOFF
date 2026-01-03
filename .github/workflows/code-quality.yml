@@ -1,0 +1,128 @@
+name: Code Quality Check
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # Run every Monday at 9 AM UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  code-length-analysis:
+    name: Check Code Length Best Practices
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Make scripts executable
+        run: chmod +x scripts/check-code-length.sh
+      
+      - name: Run code length analysis
+        id: code_check
+        run: |
+          ./scripts/check-code-length.sh || echo "check_failed=true" >> $GITHUB_OUTPUT
+      
+      - name: Create issue on failure
+        if: steps.code_check.outputs.check_failed == 'true' && github.event_name == 'schedule'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = '🚨 Code Quality Alert: Files Exceed Best Practice Length';
+            const body = `
+            ## Code Quality Issue Detected
+            
+            The automated code length check has detected files that exceed best practice guidelines.
+            
+            ### Standards
+            - **Files**: Maximum 1000 lines, recommended under 500 lines
+            - **Classes**: Maximum 500 lines, recommended under 300 lines
+            
+            ### Action Required
+            Please review the workflow logs and refactor oversized files using SOLID principles.
+            
+            **Triggered by**: Scheduled weekly check
+            **Workflow Run**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            `;
+            
+            // Check if issue already exists
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'code-quality'
+            });
+            
+            const existingIssue = issues.data.find(issue => issue.title === title);
+            
+            if (!existingIssue) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['code-quality', 'automated', 'refactoring-needed']
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existingIssue.number,
+                body: `Still detecting code quality issues.\n\nWorkflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`
+              });
+            }
+      
+      - name: Fail workflow if check failed
+        if: steps.code_check.outputs.check_failed == 'true'
+        run: exit 1
+
+  dotnet-build-test:
+    name: Build and Test .NET
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      
+      - name: Restore dependencies
+        run: dotnet restore
+      
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+      
+      - name: Test
+        run: dotnet test --no-build --configuration Release --verbosity normal
+
+  code-metrics:
+    name: Generate Code Metrics
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Count lines of code
+        run: |
+          echo "## 📊 Code Metrics" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Total Lines by Language" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          find src -name "*.cs" -not -path "*/Migrations/*" -not -path "*/bin/*" -not -path "*/obj/*" | xargs wc -l | tail -1 | awk '{print "C#:     " $1 " lines"}' >> $GITHUB_STEP_SUMMARY
+          find src -name "*.razor" -not -path "*/bin/*" -not -path "*/obj/*" | xargs wc -l | tail -1 | awk '{print "Razor:  " $1 " lines"}' >> $GITHUB_STEP_SUMMARY || echo "Razor:  0 lines" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Largest Files (excluding migrations)" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          find src -name "*.cs" -o -name "*.razor" | grep -v Migrations | xargs wc -l | sort -rn | head -10 >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+

@@ -1,0 +1,21 @@
+#!/bin/bash
+# Pre-push hook to check code quality before pushing to remote
+# Prevents pushing code that violates best practices
+
+echo "🔍 Running code quality checks..."
+
+# Run the code analysis script
+./scripts/check-code-length.sh
+
+# Check exit code
+if [ $? -ne 0 ]; then
+    echo ""
+    echo "❌ Push rejected: Code quality checks failed"
+    echo "   Fix the issues above or use --no-verify to bypass (not recommended)"
+    exit 1
+fi
+
+echo "✅ Code quality checks passed"
+exit 0
+
+
