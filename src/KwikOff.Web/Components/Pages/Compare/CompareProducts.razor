@@ -3,7 +3,9 @@
 @using KwikOff.Web.Features.Products
 @using KwikOff.Web.Features.Comparison
 @using KwikOff.Web.Domain.Enums
+@using KwikOff.Web.Infrastructure.Services
 @inject IMediator Mediator
+@inject IKwikKartIntegrationService KwikKartService
 
 <PageTitle>Compare Products - KwikOff</PageTitle>
 
@@ -130,6 +132,55 @@
         <strong>Match Rate:</strong> @comparisonSummary.MatchRate.ToString("P1") |
         <strong>Duration:</strong> @comparisonSummary.Duration.TotalSeconds.ToString("F1")s
     </div>
+
+    @if (comparisonResults != null && comparisonResults.Items.Any())
+    {
+        <div class="row mb-3">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">🚀 Export to KwikKart</h5>
+                        <p class="card-text">
+                            Send @comparisonSummary.MatchedCount matched products to KwikKart retail management system.
+                            This will create/update products with enriched data from OpenFoodFacts.
+                        </p>
+                        <button class="btn btn-primary btn-lg" @onclick="ExportToKwikKart" disabled="@isExportingToKwikKart">
+                            @if (isExportingToKwikKart)
+                            {
+                                <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                                <span>Exporting...</span>
+                            }
+                            else
+                            {
+                                <span>Export to KwikKart</span>
+                            }
+                        </button>
+                        @if (kwikKartExportResult != null)
+                        {
+                            <div class="mt-3">
+                                @if (kwikKartExportResult.Success)
+                                {
+                                    <div class="alert alert-success mb-0">
+                                        <h6 class="alert-heading">✅ Export Successful!</h6>
+                                        <p class="mb-1"><strong>Exported:</strong> @kwikKartExportResult.ProductsExported products</p>
+                                        <p class="mb-1"><strong>Created:</strong> @kwikKartExportResult.ProductsCreated | <strong>Updated:</strong> @kwikKartExportResult.ProductsUpdated | <strong>Skipped:</strong> @kwikKartExportResult.ProductsSkipped</p>
+                                        <p class="mb-0"><strong>Duration:</strong> @kwikKartExportResult.Duration.TotalSeconds.ToString("F1")s</p>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="alert alert-danger mb-0">
+                                        <h6 class="alert-heading">❌ Export Failed</h6>
+                                        <p class="mb-0">@kwikKartExportResult.ErrorMessage</p>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
 }
 
 @if (comparisonResults != null)
@@ -163,11 +214,11 @@
                     <thead>
                         <tr>
                             <th style="width: 10%;">Barcode</th>
-                            <th style="width: 22%;">Your Product</th>
-                            <th style="width: 22%;">OFF Product</th>
+                            <th style="width: 20%;">Your Product</th>
+                            <th style="width: 25%;">OFF Product</th>
                             <th style="width: 10%;">Status</th>
                             <th style="width: 8%;">Confidence</th>
-                            <th style="width: 28%;">Discrepancy Details</th>
+                            <th style="width: 27%;">Discrepancy Details</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -185,23 +236,45 @@
                                 <td>
                                     @if (result.MatchStatus != MatchStatus.Unmatched)
                                     {
-                                        @result.OffProductName
-                                        @if (!string.IsNullOrEmpty(result.OffBrand))
-                                        {
-                                            <br /><small class="text-muted">@result.OffBrand</small>
-                                        }
-                                        
-                                        @* Show info badge if names differ but barcode matched 100% *@
-                                        @if (result.ConfidenceScore >= 1.0 && 
-                                             !string.IsNullOrEmpty(result.ProductName) &&
-                                             !string.IsNullOrEmpty(result.OffProductName) &&
-                                             !string.Equals(result.ProductName, result.OffProductName, StringComparison.OrdinalIgnoreCase))
-                                        {
-                                            <br />
-                                            <span class="badge bg-info text-dark small mt-1">
-                                                <i class="bi bi-info-circle"></i> Name variation
-                                            </span>
-                                        }
+                                        <div class="d-flex align-items-center gap-2">
+                                            @* Product Image *@
+                                            @if (!string.IsNullOrEmpty(result.ImageUrl))
+                                            {
+                                                <img src="@result.ImageUrl" 
+                                                     alt="@result.OffProductName" 
+                                                     class="img-thumbnail"
+                                                     style="width: 80px; height: 80px; object-fit: contain;"
+                                                     onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22%3E%3Crect fill=%22%23ddd%22 width=%22100%22 height=%22100%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22 fill=%22%23999%22%3ENo Image%3C/text%3E%3C/svg%3E'" />
+                                            }
+                                            else
+                                            {
+                                                <div class="img-thumbnail d-flex align-items-center justify-content-center text-muted" 
+                                                     style="width: 80px; height: 80px; font-size: 0.7rem;">
+                                                    No Image
+                                                </div>
+                                            }
+                                            
+                                            @* Product Info *@
+                                            <div class="flex-grow-1">
+                                                @result.OffProductName
+                                                @if (!string.IsNullOrEmpty(result.OffBrand))
+                                                {
+                                                    <br /><small class="text-muted">@result.OffBrand</small>
+                                                }
+                                                
+                                                @* Show info badge if names differ but barcode matched 100% *@
+                                                @if (result.ConfidenceScore >= 1.0 && 
+                                                     !string.IsNullOrEmpty(result.ProductName) &&
+                                                     !string.IsNullOrEmpty(result.OffProductName) &&
+                                                     !string.Equals(result.ProductName, result.OffProductName, StringComparison.OrdinalIgnoreCase))
+                                                {
+                                                    <br />
+                                                    <span class="badge bg-info text-dark small mt-1">
+                                                        <i class="bi bi-info-circle"></i> Name variation
+                                                    </span>
+                                                }
+                                            </div>
+                                        </div>
                                     }
                                     else
                                     {
@@ -409,6 +482,7 @@ else if (!isComparing && availableBatches.Count == 0)
     private Guid? selectedBatchId;
     private MatchStatus? filter;
     private bool isComparing;
+    private bool isExportingToKwikKart;
     private int currentPage = 1;
     private string searchFilter = "";
     private int? filterPreviewCount;
@@ -417,6 +491,7 @@ else if (!isComparing && availableBatches.Count == 0)
     private ComparisonResultsPage? comparisonResults;
     private string? errorMessage;
     private string? errorDetails;
+    private KwikKartExportResult? kwikKartExportResult;
 
     private ImportBatchSummary? selectedBatch => selectedBatchId.HasValue
         ? availableBatches.FirstOrDefault(b => b.BatchId == selectedBatchId.Value)
@@ -583,5 +658,46 @@ else if (!isComparing && availableBatches.Count == 0)
         return !string.IsNullOrEmpty(result.ProductName) &&
                !string.IsNullOrEmpty(result.OffProductName) &&
                !string.Equals(result.ProductName, result.OffProductName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task ExportToKwikKart()
+    {
+        if (comparisonResults == null || !comparisonResults.Items.Any())
+        {
+            errorMessage = "No results to export";
+            return;
+        }
+
+        isExportingToKwikKart = true;
+        kwikKartExportResult = null;
+
+        try
+        {
+            // Get all matched products (not just current page)
+            var allResultsQuery = new GetComparisonResultsQuery(
+                tenantId,
+                selectedBatchId,
+                MatchStatus.Matched, // Only export matched products
+                1,
+                int.MaxValue); // Get all matched products
+            
+            var allResults = await Mediator.Send(allResultsQuery);
+
+            // Export to KwikKart
+            kwikKartExportResult = await KwikKartService.ExportToKwikKart(allResults.Items, tenantId);
+        }
+        catch (Exception ex)
+        {
+            kwikKartExportResult = new KwikKartExportResult
+            {
+                Success = false,
+                ErrorMessage = $"Export failed: {ex.Message}",
+                TenantId = tenantId
+            };
+        }
+        finally
+        {
+            isExportingToKwikKart = false;
+        }
     }
 }

@@ -81,10 +81,16 @@ public class OpenFoodFactsParser
                 Countries = JsonDataSanitizer.GetString(root, "countries"),
                 CountriesTags = JsonDataSanitizer.GetString(root, "countries_tags"),
                 
-                // Images
-                ImageUrl = JsonDataSanitizer.GetString(root, "image_url"),
-                ImageSmallUrl = JsonDataSanitizer.GetString(root, "image_small_url"),
-                ImageFrontUrl = JsonDataSanitizer.GetString(root, "image_front_url"),
+                // Images - Try multiple fields with fallbacks
+                // OpenFoodFacts has inconsistent field naming across versions
+                ImageUrl = JsonDataSanitizer.GetString(root, "image_url") 
+                    ?? JsonDataSanitizer.GetString(root, "image_front_url")
+                    ?? JsonDataSanitizer.GetString(root, "image_thumb_url"),
+                ImageSmallUrl = JsonDataSanitizer.GetString(root, "image_small_url") 
+                    ?? JsonDataSanitizer.GetString(root, "image_thumb_url")
+                    ?? JsonDataSanitizer.GetString(root, "image_url"),
+                ImageFrontUrl = JsonDataSanitizer.GetString(root, "image_front_url")
+                    ?? JsonDataSanitizer.GetString(root, "image_url"),
                 ImageIngredientsUrl = JsonDataSanitizer.GetString(root, "image_ingredients_url"),
                 ImageNutritionUrl = JsonDataSanitizer.GetString(root, "image_nutrition_url"),
                 
@@ -111,6 +117,15 @@ public class OpenFoodFactsParser
             // Validate that normalized barcode is valid
             if (string.IsNullOrWhiteSpace(product.NormalizedBarcode))
                 return null;
+            
+            // Fallback: Construct image URLs from barcode if not provided
+            // OpenFoodFacts uses a predictable URL pattern
+            if (string.IsNullOrEmpty(product.ImageUrl) && !string.IsNullOrEmpty(barcode) && barcode.Length >= 8)
+            {
+                product.ImageUrl = ConstructImageUrl(barcode, "front");
+                product.ImageSmallUrl = ConstructImageUrl(barcode, "front", small: true);
+                product.ImageFrontUrl = ConstructImageUrl(barcode, "front");
+            }
                 
             return product;
         }
@@ -119,6 +134,39 @@ public class OpenFoodFactsParser
             _logger.LogDebug(ex, "Failed to parse product from JSON");
             return null;
         }
+    }
+    
+    /// <summary>
+    /// Constructs an OpenFoodFacts image URL from a barcode.
+    /// OFF uses a predictable URL pattern: https://images.openfoodfacts.org/images/products/[barcode_path]/[image_type]_[locale].jpg
+    /// </summary>
+    private static string ConstructImageUrl(string barcode, string imageType = "front", bool small = false)
+    {
+        // Remove leading zeros and format barcode for URL path
+        var cleanBarcode = barcode.TrimStart('0');
+        if (string.IsNullOrEmpty(cleanBarcode)) cleanBarcode = "0";
+        
+        // OpenFoodFacts splits barcodes into path segments
+        // Example: 3017620422003 becomes 301/762/042/2003
+        var path = "";
+        if (cleanBarcode.Length >= 9)
+        {
+            // Split into groups of 3 digits
+            for (int i = 0; i < cleanBarcode.Length; i += 3)
+            {
+                int length = Math.Min(3, cleanBarcode.Length - i);
+                path += cleanBarcode.Substring(i, length);
+                if (i + length < cleanBarcode.Length)
+                    path += "/";
+            }
+        }
+        else
+        {
+            path = cleanBarcode;
+        }
+        
+        var size = small ? "200" : "400";
+        return $"https://images.openfoodfacts.org/images/products/{path}/{imageType}.{size}.jpg";
     }
 }
 

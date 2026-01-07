@@ -1,5 +1,6 @@
 using KwikOff.Web.Infrastructure.BackgroundServices;
 using KwikOff.Web.Infrastructure.Services;
+using KwikOff.Web.Infrastructure.Services.Mappers;
 
 namespace KwikOff.Web.Shared.Extensions;
 
@@ -46,6 +47,10 @@ public static class ServiceCollectionExtensions
 
         // Open Food Facts Services
         services.AddScoped<IOpenFoodFactsDataImporter, OpenFoodFactsDataImporter>();
+
+        // KwikKart Integration Services
+        services.AddScoped<KwikKartMapper>();
+        services.AddScoped<IKwikKartIntegrationService, KwikKartIntegrationService>();
 
         // Background Services - DISABLED to prevent auto-sync on startup
         // services.AddHostedService<SyncBackgroundService>();

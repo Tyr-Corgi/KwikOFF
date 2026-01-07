@@ -129,6 +129,7 @@ public class ComparisonResultDto
     public string? OffProductName { get; set; }
     public string? OffBrand { get; set; }
     public string? OffBarcode { get; set; }
+    public string? ImageUrl { get; set; }
     public bool HasDiscrepancies { get; set; }
     public DateTime ComparedAt { get; set; }
     
@@ -201,6 +202,7 @@ public class GetComparisonResultsHandler : IRequestHandler<GetComparisonResultsQ
                 OffProductName = r.OpenFoodFactsProduct != null ? r.OpenFoodFactsProduct.ProductName : null,
                 OffBrand = r.OpenFoodFactsProduct != null ? r.OpenFoodFactsProduct.Brands : null,
                 OffBarcode = r.OpenFoodFactsProduct != null ? r.OpenFoodFactsProduct.Barcode : null,
+                ImageSmallUrl = r.OpenFoodFactsProduct != null ? r.OpenFoodFactsProduct.ImageSmallUrl : null,
                 HasDiscrepancies = r.HasNameDiscrepancy || r.HasBrandDiscrepancy || r.HasCategoryDiscrepancy,
                 r.ComparedAt,
                 r.ComparisonDetails,
@@ -226,6 +228,7 @@ public class GetComparisonResultsHandler : IRequestHandler<GetComparisonResultsQ
                 OffProductName = r.OffProductName,
                 OffBrand = r.OffBrand,
                 OffBarcode = r.OffBarcode,
+                ImageUrl = r.ImageSmallUrl,
                 HasDiscrepancies = r.HasDiscrepancies,
                 ComparedAt = r.ComparedAt,
                 UsedSecondarySearch = r.UsedSecondarySearch,

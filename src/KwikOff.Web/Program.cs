@@ -9,6 +9,9 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
+// Add API Controllers for REST endpoints
+builder.Services.AddControllers();
+
 // Configure SignalR hub options for VERY large payloads
 builder.Services.AddSignalR(options =>
 {
@@ -72,6 +75,26 @@ builder.Services.AddHttpClient("OpenFoodFacts", client =>
     client.Timeout = TimeSpan.FromMinutes(30); // Long timeout for large downloads
 });
 
+// Add HttpClient for KwikKart Integration
+builder.Services.AddHttpClient("KwikKart", client =>
+{
+    var baseUrl = builder.Configuration["KwikKart:BaseUrl"] ?? "http://localhost:5000";
+    client.BaseAddress = new Uri(baseUrl);
+    
+    var apiKey = builder.Configuration["KwikKart:ApiKey"];
+    if (!string.IsNullOrEmpty(apiKey))
+    {
+        client.DefaultRequestHeaders.Add("X-API-Key", apiKey);
+    }
+    
+    var timeoutSeconds = builder.Configuration.GetValue<int>("KwikKart:TimeoutSeconds", 300);
+    client.Timeout = TimeSpan.FromSeconds(timeoutSeconds);
+});
+
+// Configure KwikKart settings
+builder.Services.Configure<KwikOff.Web.Infrastructure.Services.KwikKartSettings>(
+    builder.Configuration.GetSection("KwikKart"));
+
 var app = builder.Build();
 
 // Reset any stuck syncs from previous crashes/restarts
@@ -123,6 +146,7 @@ if (!app.Environment.IsDevelopment())
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
 app.UseAntiforgery();
 
+app.MapControllers(); // Map API controllers
 app.MapStaticAssets();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
