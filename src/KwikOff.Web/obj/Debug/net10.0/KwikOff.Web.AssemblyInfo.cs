@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("KwikOff.Web")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+ff2c5c06f0dd32025e9613b4049c95c2c8e0270a")]
 [assembly: System.Reflection.AssemblyProductAttribute("KwikOff.Web")]
 [assembly: System.Reflection.AssemblyTitleAttribute("KwikOff.Web")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

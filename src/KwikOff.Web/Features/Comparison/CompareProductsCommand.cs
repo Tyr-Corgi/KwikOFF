@@ -98,7 +98,8 @@ public record GetComparisonResultsQuery(
     Guid? ImportBatchId = null,
     MatchStatus? Status = null,
     int Page = 1,
-    int PageSize = 10
+    int PageSize = 10,
+    string? SearchTerm = null
 ) : IRequest<ComparisonResultsPage>;
 
 /// <summary>
@@ -183,6 +184,20 @@ public class GetComparisonResultsHandler : IRequestHandler<GetComparisonResultsQ
         if (request.Status.HasValue)
         {
             query = query.Where(r => r.MatchStatus == request.Status.Value);
+        }
+
+        // Apply search term filter across multiple fields
+        if (!string.IsNullOrWhiteSpace(request.SearchTerm))
+        {
+            var searchLower = request.SearchTerm.ToLower();
+            query = query.Where(r =>
+                r.ImportedProduct.Barcode.ToLower().Contains(searchLower) ||
+                r.ImportedProduct.ProductName.ToLower().Contains(searchLower) ||
+                (r.ImportedProduct.Brand != null && r.ImportedProduct.Brand.ToLower().Contains(searchLower)) ||
+                (r.OpenFoodFactsProduct != null && r.OpenFoodFactsProduct.Barcode.ToLower().Contains(searchLower)) ||
+                (r.OpenFoodFactsProduct != null && r.OpenFoodFactsProduct.ProductName != null && r.OpenFoodFactsProduct.ProductName.ToLower().Contains(searchLower)) ||
+                (r.OpenFoodFactsProduct != null && r.OpenFoodFactsProduct.Brands != null && r.OpenFoodFactsProduct.Brands.ToLower().Contains(searchLower))
+            );
         }
 
         var totalCount = await query.CountAsync(cancellationToken);

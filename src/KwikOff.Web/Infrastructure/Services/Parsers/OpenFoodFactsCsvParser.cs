@@ -140,6 +140,15 @@ public class OpenFoodFactsCsvParser
             if (string.IsNullOrWhiteSpace(product.NormalizedBarcode))
                 return null;
 
+            // Fallback: Construct image URLs from barcode if not provided
+            // OpenFoodFacts uses a predictable URL pattern
+            if (string.IsNullOrEmpty(product.ImageUrl) && !string.IsNullOrEmpty(barcode) && barcode.Length >= 8)
+            {
+                product.ImageUrl = ConstructImageUrl(barcode, "front");
+                product.ImageSmallUrl = ConstructImageUrl(barcode, "front", small: true);
+                product.ImageFrontUrl = ConstructImageUrl(barcode, "front");
+            }
+
             return product;
         }
         catch (Exception ex)
@@ -256,6 +265,39 @@ public class OpenFoodFactsCsvParser
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Constructs an OpenFoodFacts image URL from a barcode.
+    /// OFF uses a predictable URL pattern: https://images.openfoodfacts.org/images/products/[barcode_path]/[image_type]_en.[size].jpg
+    /// </summary>
+    private static string ConstructImageUrl(string barcode, string imageType = "front", bool small = false)
+    {
+        // Remove leading zeros and format barcode for URL path
+        var cleanBarcode = barcode.TrimStart('0');
+        if (string.IsNullOrEmpty(cleanBarcode)) cleanBarcode = "0";
+
+        // OpenFoodFacts splits barcodes into path segments
+        // Example: 3017620422003 becomes 301/762/042/2003
+        var path = "";
+        if (cleanBarcode.Length >= 9)
+        {
+            // Split into groups of 3 digits
+            for (int i = 0; i < cleanBarcode.Length; i += 3)
+            {
+                int length = Math.Min(3, cleanBarcode.Length - i);
+                path += cleanBarcode.Substring(i, length);
+                if (i + length < cleanBarcode.Length)
+                    path += "/";
+            }
+        }
+        else
+        {
+            path = cleanBarcode;
+        }
+
+        var size = small ? "200" : "400";
+        return $"https://images.openfoodfacts.org/images/products/{path}/{imageType}_en.{size}.jpg";
     }
 }
 

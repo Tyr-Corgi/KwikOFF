@@ -4,10 +4,18 @@
 @using KwikOff.Web.Features.Comparison
 @using KwikOff.Web.Domain.Enums
 @using KwikOff.Web.Infrastructure.Services
+@implements IDisposable
 @inject IMediator Mediator
 @inject IKwikKartIntegrationService KwikKartService
 
 <PageTitle>Compare Products - KwikOff</PageTitle>
+
+<style>
+    th[style*="cursor: pointer"]:hover {
+        background-color: #f8f9fa;
+        user-select: none;
+    }
+</style>
 
 <h1>Compare Products</h1>
 <p>Compare your imported products against the Open Food Facts database.</p>
@@ -68,26 +76,6 @@
         <button class="btn btn-outline-secondary" @onclick="LoadBatches">
             Refresh Batches
         </button>
-    </div>
-</div>
-
-<div class="row mb-3">
-    <div class="col-md-6">
-        <label for="searchFilter" class="form-label">Search/Filter Products</label>
-        <div class="input-group">
-            <input type="text" class="form-control" id="searchFilter" @bind="searchFilter" @bind:event="oninput" 
-                   placeholder="Search by barcode, product name, or brand..." />
-            <button class="btn btn-outline-primary" @onclick="PreviewFilter" disabled="@(!selectedBatchId.HasValue)">
-                Preview
-            </button>
-        </div>
-        <div class="form-text">
-            Filter imported products before comparing
-            @if (filterPreviewCount.HasValue)
-            {
-                <span class="badge bg-info ms-2">@filterPreviewCount products match your filter</span>
-            }
-        </div>
     </div>
 </div>
 
@@ -185,6 +173,40 @@
 
 @if (comparisonResults != null)
 {
+    <div class="row mb-3">
+        <div class="col-md-6">
+            <label for="searchFilter" class="form-label">Search All Results</label>
+            <input type="text" class="form-control" id="searchFilter" @bind="searchFilterText" @bind:event="oninput" @bind:after="OnSearchChanged"
+                   placeholder="Search by barcode, product name, or brand..." />
+            <div class="form-text">
+                @if (isSearching)
+                {
+                    <span class="spinner-border spinner-border-sm me-1"></span>
+                    <span>Searching...</span>
+                }
+                else if (!string.IsNullOrWhiteSpace(searchFilterText))
+                {
+                    <span>Found @comparisonResults.TotalCount results matching "@searchFilterText"</span>
+                }
+                else
+                {
+                    <span>Total @comparisonResults.TotalCount results - Type to search all comparison results</span>
+                }
+            </div>
+        </div>
+        <div class="col-md-3">
+            <label for="pageSize" class="form-label">Items Per Page</label>
+            <select class="form-select" id="pageSize" @bind="pageSize" @bind:after="OnPageSizeChanged">
+                <option value="10">10</option>
+                <option value="20">20</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="200">200</option>
+            </select>
+            <div class="form-text">Change how many items to display</div>
+        </div>
+    </div>
+
     <div class="card">
         <div class="card-header d-flex justify-content-between align-items-center">
             <strong>Comparison Results</strong>
@@ -213,12 +235,24 @@
                 <table class="table table-hover mb-0">
                     <thead>
                         <tr>
-                            <th style="width: 10%;">Barcode</th>
-                            <th style="width: 20%;">Your Product</th>
-                            <th style="width: 25%;">OFF Product</th>
-                            <th style="width: 10%;">Status</th>
-                            <th style="width: 8%;">Confidence</th>
-                            <th style="width: 27%;">Discrepancy Details</th>
+                            <th style="width: 10%; cursor: pointer;" @onclick='() => SortBy("Barcode")'>
+                                Barcode @GetSortIcon("Barcode")
+                            </th>
+                            <th style="width: 20%; cursor: pointer;" @onclick='() => SortBy("ProductName")'>
+                                Your Product @GetSortIcon("ProductName")
+                            </th>
+                            <th style="width: 25%; cursor: pointer;" @onclick='() => SortBy("OffProductName")'>
+                                OFF Product @GetSortIcon("OffProductName")
+                            </th>
+                            <th style="width: 10%; cursor: pointer;" @onclick='() => SortBy("MatchStatus")'>
+                                Status @GetSortIcon("MatchStatus")
+                            </th>
+                            <th style="width: 8%; cursor: pointer;" @onclick='() => SortBy("ConfidenceScore")'>
+                                Confidence @GetSortIcon("ConfidenceScore")
+                            </th>
+                            <th style="width: 27%; cursor: pointer;" @onclick='() => SortBy("HasDiscrepancies")'>
+                                Discrepancy Details @GetSortIcon("HasDiscrepancies")
+                            </th>
                         </tr>
                     </thead>
                     <tbody>
@@ -484,7 +518,10 @@ else if (!isComparing && availableBatches.Count == 0)
     private bool isComparing;
     private bool isExportingToKwikKart;
     private int currentPage = 1;
-    private string searchFilter = "";
+    private int pageSize = 20; // Default page size
+    private string searchFilter = ""; // Used for pre-comparison filtering
+    private string searchFilterText = ""; // Used for database search
+    private bool isSearching = false;
     private int? filterPreviewCount;
     private List<ImportBatchSummary> availableBatches = new();
     private ComparisonSummary? comparisonSummary;
@@ -492,6 +529,13 @@ else if (!isComparing && availableBatches.Count == 0)
     private string? errorMessage;
     private string? errorDetails;
     private KwikKartExportResult? kwikKartExportResult;
+    
+    // Sorting state
+    private string? sortColumn;
+    private bool sortDescending;
+    
+    // Search debounce
+    private System.Threading.Timer? searchDebounceTimer;
 
     private ImportBatchSummary? selectedBatch => selectedBatchId.HasValue
         ? availableBatches.FirstOrDefault(b => b.BatchId == selectedBatchId.Value)
@@ -623,7 +667,8 @@ else if (!isComparing && availableBatches.Count == 0)
                 selectedBatchId,
                 filter,
                 currentPage,
-                20);
+                pageSize,
+                string.IsNullOrWhiteSpace(searchFilterText) ? null : searchFilterText);
             comparisonResults = await Mediator.Send(query);
         }
         catch (Exception ex)
@@ -631,6 +676,40 @@ else if (!isComparing && availableBatches.Count == 0)
             errorMessage = "Failed to load comparison results";
             errorDetails = $"Message: {ex.Message}\n\nStack Trace:\n{ex.StackTrace}";
         }
+    }
+
+    private async Task OnPageSizeChanged()
+    {
+        // Reset to first page when changing page size
+        currentPage = 1;
+        await LoadResults();
+    }
+
+    private void OnSearchChanged()
+    {
+        // Debounce search - wait 500ms after user stops typing
+        searchDebounceTimer?.Dispose();
+        searchDebounceTimer = new System.Threading.Timer(async _ =>
+        {
+            isSearching = true;
+            await InvokeAsync(StateHasChanged);
+            
+            try
+            {
+                currentPage = 1; // Reset to first page on search
+                await LoadResults();
+            }
+            finally
+            {
+                isSearching = false;
+                await InvokeAsync(StateHasChanged);
+            }
+        }, null, 500, Timeout.Infinite);
+    }
+    
+    public void Dispose()
+    {
+        searchDebounceTimer?.Dispose();
     }
 
     private async Task SetFilter(MatchStatus? newFilter)
@@ -699,5 +778,60 @@ else if (!isComparing && availableBatches.Count == 0)
         {
             isExportingToKwikKart = false;
         }
+    }
+
+    private void SortBy(string column)
+    {
+        if (comparisonResults == null || !comparisonResults.Items.Any())
+            return;
+
+        // Toggle sort direction if clicking the same column
+        if (sortColumn == column)
+        {
+            sortDescending = !sortDescending;
+        }
+        else
+        {
+            sortColumn = column;
+            sortDescending = false;
+        }
+
+        // Sort the results
+        comparisonResults.Items = column switch
+        {
+            "Barcode" => sortDescending
+                ? comparisonResults.Items.OrderByDescending(r => r.Barcode).ToList()
+                : comparisonResults.Items.OrderBy(r => r.Barcode).ToList(),
+
+            "ProductName" => sortDescending
+                ? comparisonResults.Items.OrderByDescending(r => r.ProductName).ToList()
+                : comparisonResults.Items.OrderBy(r => r.ProductName).ToList(),
+
+            "OffProductName" => sortDescending
+                ? comparisonResults.Items.OrderByDescending(r => r.OffProductName ?? "").ToList()
+                : comparisonResults.Items.OrderBy(r => r.OffProductName ?? "").ToList(),
+
+            "MatchStatus" => sortDescending
+                ? comparisonResults.Items.OrderByDescending(r => r.MatchStatus).ToList()
+                : comparisonResults.Items.OrderBy(r => r.MatchStatus).ToList(),
+
+            "ConfidenceScore" => sortDescending
+                ? comparisonResults.Items.OrderByDescending(r => r.ConfidenceScore).ToList()
+                : comparisonResults.Items.OrderBy(r => r.ConfidenceScore).ToList(),
+
+            "HasDiscrepancies" => sortDescending
+                ? comparisonResults.Items.OrderByDescending(r => r.HasDiscrepancies).ToList()
+                : comparisonResults.Items.OrderBy(r => r.HasDiscrepancies).ToList(),
+
+            _ => comparisonResults.Items
+        };
+    }
+
+    private string GetSortIcon(string column)
+    {
+        if (sortColumn != column)
+            return "⇅"; // Both arrows when not sorted
+
+        return sortDescending ? "▼" : "▲";
     }
 }

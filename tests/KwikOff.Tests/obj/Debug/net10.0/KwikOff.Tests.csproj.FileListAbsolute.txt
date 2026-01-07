@@ -174,3 +174,4 @@
 /Users/tygr/Desktop/Repos/KwikOFF/tests/KwikOff.Tests/bin/Debug/net10.0/runtimes/win/lib/net6.0/System.Diagnostics.EventLog.Messages.dll
 /Users/tygr/Desktop/Repos/KwikOFF/tests/KwikOff.Tests/bin/Debug/net10.0/KwikOff.Web.dll
 /Users/tygr/Desktop/Repos/KwikOFF/tests/KwikOff.Tests/bin/Debug/net10.0/KwikOff.Web.pdb
+/Users/tygr/Desktop/Repos/KwikOFF/tests/KwikOff.Tests/obj/Debug/net10.0/KwikOff.Tests.sourcelink.json

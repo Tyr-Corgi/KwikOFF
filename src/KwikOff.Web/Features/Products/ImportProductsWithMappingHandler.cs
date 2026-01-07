@@ -5,6 +5,7 @@ using KwikOff.Web.Domain.ValueObjects;
 using KwikOff.Web.Infrastructure.Data;
 using KwikOff.Web.Infrastructure.Services;
 using MediatR;
+using Microsoft.EntityFrameworkCore;
 
 namespace KwikOff.Web.Features.Products;
 
@@ -21,6 +22,7 @@ public class ImportProductsWithMappingHandler : IRequestHandler<ImportProductsWi
     private readonly ILogger<ImportProductsWithMappingHandler> _logger;
 
     private const int BatchSize = 1000;
+    private int _duplicateCount = 0;
 
     public ImportProductsWithMappingHandler(
         AppDbContext dbContext,
@@ -132,6 +134,15 @@ public class ImportProductsWithMappingHandler : IRequestHandler<ImportProductsWi
             }
 
             result.Success = result.ImportedCount > 0;
+            
+            // Add duplicates to skipped count
+            result.SkippedCount += _duplicateCount;
+            
+            // Add warning about duplicates
+            if (_duplicateCount > 0)
+            {
+                result.Warnings.Add($"{_duplicateCount} duplicate products were skipped (barcode already exists for this tenant).");
+            }
             
             // Add warnings about barcode types
             if (skuCount > 0)
@@ -269,7 +280,34 @@ public class ImportProductsWithMappingHandler : IRequestHandler<ImportProductsWi
 
     private async Task SaveBatchAsync(List<ImportedProduct> products, CancellationToken cancellationToken)
     {
-        _dbContext.ImportedProducts.AddRange(products);
-        await _dbContext.SaveChangesAsync(cancellationToken);
+        // Check for existing products with same tenant_id + barcode
+        var tenantId = products.First().TenantId;
+        var barcodes = products.Select(p => p.Barcode).ToList();
+        
+        var existingBarcodes = await _dbContext.ImportedProducts
+            .Where(p => p.TenantId == tenantId && barcodes.Contains(p.Barcode))
+            .Select(p => p.Barcode)
+            .ToListAsync(cancellationToken);
+        
+        // Filter out duplicates - only add products that don't already exist
+        var newProducts = products
+            .Where(p => !existingBarcodes.Contains(p.Barcode))
+            .ToList();
+        
+        if (newProducts.Any())
+        {
+            _dbContext.ImportedProducts.AddRange(newProducts);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+        
+        // Log duplicates that were skipped
+        var duplicateCount = products.Count - newProducts.Count;
+        if (duplicateCount > 0)
+        {
+            _duplicateCount += duplicateCount;
+            _logger.LogInformation(
+                "Skipped {DuplicateCount} duplicate products for tenant {TenantId}",
+                duplicateCount, tenantId);
+        }
     }
 }

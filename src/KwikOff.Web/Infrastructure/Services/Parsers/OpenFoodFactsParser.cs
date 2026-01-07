@@ -81,15 +81,18 @@ public class OpenFoodFactsParser
                 Countries = JsonDataSanitizer.GetString(root, "countries"),
                 CountriesTags = JsonDataSanitizer.GetString(root, "countries_tags"),
                 
-                // Images - Try multiple fields with fallbacks
-                // OpenFoodFacts has inconsistent field naming across versions
-                ImageUrl = JsonDataSanitizer.GetString(root, "image_url") 
+                // Images - Prioritize selected_images.front (official primary image)
+                // Then fall back to direct image fields, then construct from barcode
+                ImageUrl = JsonDataSanitizer.GetString(root, "selected_images.front.display.en")
+                    ?? JsonDataSanitizer.GetString(root, "image_url") 
                     ?? JsonDataSanitizer.GetString(root, "image_front_url")
                     ?? JsonDataSanitizer.GetString(root, "image_thumb_url"),
-                ImageSmallUrl = JsonDataSanitizer.GetString(root, "image_small_url") 
+                ImageSmallUrl = JsonDataSanitizer.GetString(root, "selected_images.front.small.en")
+                    ?? JsonDataSanitizer.GetString(root, "image_small_url") 
                     ?? JsonDataSanitizer.GetString(root, "image_thumb_url")
                     ?? JsonDataSanitizer.GetString(root, "image_url"),
-                ImageFrontUrl = JsonDataSanitizer.GetString(root, "image_front_url")
+                ImageFrontUrl = JsonDataSanitizer.GetString(root, "selected_images.front.display.en")
+                    ?? JsonDataSanitizer.GetString(root, "image_front_url")
                     ?? JsonDataSanitizer.GetString(root, "image_url"),
                 ImageIngredientsUrl = JsonDataSanitizer.GetString(root, "image_ingredients_url"),
                 ImageNutritionUrl = JsonDataSanitizer.GetString(root, "image_nutrition_url"),

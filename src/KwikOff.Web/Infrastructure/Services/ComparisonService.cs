@@ -277,10 +277,32 @@ public class ComparisonService : IComparisonService
 
         // Save results - use a new context to avoid disposal issues
         await using var saveContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-        saveContext.ComparisonResults.AddRange(results);
-        await saveContext.SaveChangesAsync(cancellationToken);
+        
+        // Check for existing comparison results to avoid duplicates
+        var importedProductIds = results.Select(r => r.ImportedProductId).ToList();
+        var existingResults = await saveContext.ComparisonResults
+            .Where(cr => importedProductIds.Contains(cr.ImportedProductId))
+            .Select(cr => cr.ImportedProductId)
+            .ToListAsync(cancellationToken);
+        
+        // Only add new results that don't already exist
+        var newResults = results
+            .Where(r => !existingResults.Contains(r.ImportedProductId))
+            .ToList();
+        
+        if (newResults.Any())
+        {
+            saveContext.ComparisonResults.AddRange(newResults);
+            await saveContext.SaveChangesAsync(cancellationToken);
+            _logger.LogInformation("Saved {NewCount} new comparison results for batch {BatchId} ({SkippedCount} duplicates skipped)", 
+                newResults.Count, batchId, results.Count - newResults.Count);
+        }
+        else
+        {
+            _logger.LogInformation("All {Count} comparison results already exist for batch {BatchId}, skipped saving duplicates", 
+                results.Count, batchId);
+        }
 
-        _logger.LogInformation("Compared {Count} products from batch {BatchId}", results.Count, batchId);
         Console.WriteLine($"[COMPARISON] Results saved successfully!");
 
         return results;

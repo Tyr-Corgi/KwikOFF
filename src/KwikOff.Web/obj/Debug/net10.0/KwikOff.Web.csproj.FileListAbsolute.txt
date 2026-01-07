@@ -247,3 +247,4 @@
 /Users/tygr/Desktop/Repos/KwikOFF/src/KwikOff.Web/obj/Debug/net10.0/KwikOff.Web.genruntimeconfig.cache
 /Users/tygr/Desktop/Repos/KwikOFF/src/KwikOff.Web/obj/Debug/net10.0/ref/KwikOff.Web.dll
 /Users/tygr/Desktop/Repos/KwikOFF/src/KwikOff.Web/obj/Debug/net10.0/compressed/gp53bnuwvx-{0}-ztt29zt0n6-ztt29zt0n6.gz
+/Users/tygr/Desktop/Repos/KwikOFF/src/KwikOff.Web/obj/Debug/net10.0/KwikOff.Web.sourcelink.json
