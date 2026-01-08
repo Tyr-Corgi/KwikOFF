@@ -55,6 +55,7 @@
             else
             {
                 <option value="">Select a batch to compare...</option>
+                <option value="@Guid.Empty">🔄 All Batches (Compare Everything)</option>
                 @foreach (var batch in availableBatches)
                 {
                     <option value="@batch.BatchId">
@@ -63,7 +64,20 @@
                 }
             }
         </select>
-        <div class="form-text">Select which import to compare against Open Food Facts - All products will be compared</div>
+        <div class="form-text">
+            @if (selectedBatchId == Guid.Empty)
+            {
+                <strong>Comparing ALL @availableBatches.Sum(b => b.ProductCount) products from all import batches</strong>
+            }
+            else if (selectedBatchId.HasValue)
+            {
+                <span>Selected batch will be compared against Open Food Facts</span>
+            }
+            else
+            {
+                <span>Select which import to compare against Open Food Facts</span>
+            }
+        </div>
     </div>
     <div class="col-md-3 d-flex align-items-end gap-2">
         <button class="btn btn-primary" @onclick="StartComparison" disabled="@(isComparing || !selectedBatchId.HasValue)">
@@ -71,7 +85,14 @@
             {
                 <span class="spinner-border spinner-border-sm me-1" role="status"></span>
             }
-            Compare Products
+            @if (selectedBatchId == Guid.Empty)
+            {
+                <span>Compare All Batches</span>
+            }
+            else
+            {
+                <span>Compare Products</span>
+            }
         </button>
         <button class="btn btn-outline-secondary" @onclick="LoadBatches">
             Refresh Batches
@@ -550,8 +571,8 @@ else if (!isComparing && availableBatches.Count == 0)
     {
         try
         {
-            // Load ALL batches regardless of tenant ID
-            var query = new GetImportBatchesQuery(null, 1, 100);
+            // Load batches for the default tenant only
+            var query = new GetImportBatchesQuery(tenantId, 1, 100);
             var result = await Mediator.Send(query);
             availableBatches = result.Items;
             errorMessage = null;

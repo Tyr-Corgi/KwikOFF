@@ -160,23 +160,27 @@ public class DiscrepancyDetail
 /// </summary>
 public class GetComparisonResultsHandler : IRequestHandler<GetComparisonResultsQuery, ComparisonResultsPage>
 {
-    private readonly AppDbContext _dbContext;
+    private readonly IDbContextFactory<AppDbContext> _dbContextFactory;
 
-    public GetComparisonResultsHandler(AppDbContext dbContext)
+    public GetComparisonResultsHandler(IDbContextFactory<AppDbContext> dbContextFactory)
     {
-        _dbContext = dbContext;
+        _dbContextFactory = dbContextFactory;
     }
 
     public async Task<ComparisonResultsPage> Handle(
         GetComparisonResultsQuery request,
         CancellationToken cancellationToken)
     {
-        var query = _dbContext.ComparisonResults
+        await using var dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        
+        var query = dbContext.ComparisonResults
             .Include(r => r.ImportedProduct)
             .Include(r => r.OpenFoodFactsProduct)
             .Where(r => r.ImportedProduct.TenantId == request.TenantId);
 
-        if (request.ImportBatchId.HasValue)
+        // If ImportBatchId is provided and not Guid.Empty, filter by specific batch
+        // If ImportBatchId is Guid.Empty, get results from ALL batches
+        if (request.ImportBatchId.HasValue && request.ImportBatchId.Value != Guid.Empty)
         {
             query = query.Where(r => r.ImportedProduct.ImportBatchId == request.ImportBatchId.Value);
         }
@@ -243,7 +247,7 @@ public class GetComparisonResultsHandler : IRequestHandler<GetComparisonResultsQ
                 OffProductName = r.OffProductName,
                 OffBrand = r.OffBrand,
                 OffBarcode = r.OffBarcode,
-                ImageUrl = r.ImageSmallUrl,
+                ImageUrl = r.ImageSmallUrl, // Use database URL only - cannot reliably construct
                 HasDiscrepancies = r.HasDiscrepancies,
                 ComparedAt = r.ComparedAt,
                 UsedSecondarySearch = r.UsedSecondarySearch,

@@ -184,7 +184,13 @@ public class ComparisonService : IComparisonService
         await using var dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
         
         var query = dbContext.ImportedProducts
-            .Where(p => p.ImportBatchId == batchId && p.TenantId == tenantId);
+            .Where(p => p.TenantId == tenantId);
+        
+        // If batchId is Guid.Empty, compare ALL batches, otherwise filter by specific batch
+        if (batchId != Guid.Empty)
+        {
+            query = query.Where(p => p.ImportBatchId == batchId);
+        }
 
         // Apply search filter if provided
         if (!string.IsNullOrWhiteSpace(searchFilter))
@@ -200,7 +206,7 @@ public class ComparisonService : IComparisonService
             .Take(maxProducts)
             .ToListAsync(cancellationToken);
 
-        Console.WriteLine($"[COMPARISON] Found {products.Count} products to compare (max: {maxProducts}, filter: '{searchFilter}')");
+        Console.WriteLine($"[COMPARISON] Found {products.Count} products to compare (batch: {(batchId == Guid.Empty ? "ALL" : batchId.ToString())}, max: {maxProducts}, filter: '{searchFilter}')");
 
         // OPTIMIZATION: Pre-load all potential OFF matches in ONE query
         var normalizedBarcodes = products

@@ -282,15 +282,32 @@ public class ImportProductsWithMappingHandler : IRequestHandler<ImportProductsWi
     {
         // Check for existing products with same tenant_id + barcode
         var tenantId = products.First().TenantId;
-        var barcodes = products.Select(p => p.Barcode).ToList();
+        
+        // First, remove duplicates WITHIN the batch itself (keep first occurrence)
+        var uniqueProducts = products
+            .GroupBy(p => p.Barcode)
+            .Select(g => g.First())
+            .ToList();
+        
+        var inBatchDuplicates = products.Count - uniqueProducts.Count;
+        if (inBatchDuplicates > 0)
+        {
+            _duplicateCount += inBatchDuplicates;
+            _logger.LogInformation(
+                "Skipped {InBatchDuplicates} duplicate products within the same batch",
+                inBatchDuplicates);
+        }
+        
+        // Then check against database
+        var barcodes = uniqueProducts.Select(p => p.Barcode).ToList();
         
         var existingBarcodes = await _dbContext.ImportedProducts
             .Where(p => p.TenantId == tenantId && barcodes.Contains(p.Barcode))
             .Select(p => p.Barcode)
             .ToListAsync(cancellationToken);
         
-        // Filter out duplicates - only add products that don't already exist
-        var newProducts = products
+        // Filter out duplicates - only add products that don't already exist in database
+        var newProducts = uniqueProducts
             .Where(p => !existingBarcodes.Contains(p.Barcode))
             .ToList();
         
@@ -300,14 +317,14 @@ public class ImportProductsWithMappingHandler : IRequestHandler<ImportProductsWi
             await _dbContext.SaveChangesAsync(cancellationToken);
         }
         
-        // Log duplicates that were skipped
-        var duplicateCount = products.Count - newProducts.Count;
-        if (duplicateCount > 0)
+        // Log database duplicates that were skipped
+        var dbDuplicateCount = uniqueProducts.Count - newProducts.Count;
+        if (dbDuplicateCount > 0)
         {
-            _duplicateCount += duplicateCount;
+            _duplicateCount += dbDuplicateCount;
             _logger.LogInformation(
-                "Skipped {DuplicateCount} duplicate products for tenant {TenantId}",
-                duplicateCount, tenantId);
+                "Skipped {DuplicateCount} duplicate products already in database for tenant {TenantId}",
+                dbDuplicateCount, tenantId);
         }
     }
 }
