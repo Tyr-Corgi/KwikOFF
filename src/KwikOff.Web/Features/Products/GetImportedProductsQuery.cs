@@ -128,7 +128,8 @@ public class GetImportBatchesHandler : IRequestHandler<GetImportBatchesQuery, Pa
             query = query.Where(p => p.TenantId == request.TenantId);
         }
 
-        var grouped = query
+        // Materialize the grouped query once to avoid double enumeration issues
+        var allBatches = await query
             .GroupBy(p => new { p.ImportBatchId, p.TenantId, p.FileName })
             .Select(g => new ImportBatchSummary
             {
@@ -137,15 +138,16 @@ public class GetImportBatchesHandler : IRequestHandler<GetImportBatchesQuery, Pa
                 FileName = g.Key.FileName,
                 ProductCount = g.Count(),
                 ImportedAt = g.Min(p => p.ImportedAt)
-            });
-
-        var totalCount = await grouped.CountAsync(cancellationToken);
-
-        var items = await grouped
+            })
             .OrderByDescending(b => b.ImportedAt)
+            .ToListAsync(cancellationToken);
+
+        var totalCount = allBatches.Count;
+
+        var items = allBatches
             .Skip((request.Page - 1) * request.PageSize)
             .Take(request.PageSize)
-            .ToListAsync(cancellationToken);
+            .ToList();
 
         return new PagedResult<ImportBatchSummary>
         {

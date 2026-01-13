@@ -22,6 +22,11 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ICsvProductReader, CsvProductReader>();
         services.AddScoped<IExcelProductReader, ExcelProductReader>();
         services.AddScoped<IBarcodeNormalizer, BarcodeNormalizer>();
+        services.AddScoped<ISmartValueDetector, SmartValueDetector>();
+
+        // Name and Brand Processing Services
+        services.AddScoped<INameNormalizer, NameNormalizer>();
+        services.AddScoped<IBrandExtractor, BrandExtractor>();
 
         // Field Detection Services (Strategy Pattern)
         services.AddScoped<IColumnMappingValidator, ColumnMappingValidator>();
@@ -36,6 +41,7 @@ public static class ServiceCollectionExtensions
 
         // Export Services
         services.AddScoped<ICsvExporter, CsvExporter>();
+        services.AddScoped<IJsonExporter, JsonExporter>();
         
         // Image URL Services
         services.AddHttpClient<IImageUrlService, ImageUrlService>(client =>

@@ -14,17 +14,23 @@ public class ComparisonService : IComparisonService
     private readonly IDbContextFactory<AppDbContext> _dbContextFactory;
     private readonly IBarcodeNormalizer _barcodeNormalizer;
     private readonly IAIService _aiService;
+    private readonly INameNormalizer _nameNormalizer;
+    private readonly IBrandExtractor _brandExtractor;
     private readonly ILogger<ComparisonService> _logger;
 
     public ComparisonService(
         IDbContextFactory<AppDbContext> dbContextFactory,
         IBarcodeNormalizer barcodeNormalizer,
         IAIService aiService,
+        INameNormalizer nameNormalizer,
+        IBrandExtractor brandExtractor,
         ILogger<ComparisonService> logger)
     {
         _dbContextFactory = dbContextFactory;
         _barcodeNormalizer = barcodeNormalizer;
         _aiService = aiService;
+        _nameNormalizer = nameNormalizer;
+        _brandExtractor = brandExtractor;
         _logger = logger;
     }
 
@@ -41,9 +47,11 @@ public class ComparisonService : IComparisonService
         string matchMethod = "none";
         double matchConfidence = 0;
 
-        // Strategy 1: Try barcode match (only if it's a real barcode, not SKU)
-        if (barcodeType != BarcodeType.Sku && barcodeType != BarcodeType.Unknown)
+        // Strategy 1: Multi-strategy barcode matching (only if it's a real barcode, not SKU)
+        // Also require at least 8 digits to avoid false matches with internal store codes
+        if (barcodeType != BarcodeType.Sku && barcodeType != BarcodeType.Unknown && normalizedBarcode.Length >= 8)
         {
+            // Strategy 1a: Try exact normalized barcode match
             offProduct = await dbContext.OpenFoodFactsProducts
                 .FirstOrDefaultAsync(p => p.NormalizedBarcode == normalizedBarcode, cancellationToken);
             
@@ -52,12 +60,44 @@ public class ComparisonService : IComparisonService
                 matchMethod = "barcode_exact";
                 matchConfidence = 1.0;
             }
+            
+            // Strategy 1b: If normalized is 12-digit UPC-A, also try as EAN-13 (prepend '0')
+            if (offProduct == null && normalizedBarcode.Length == 12)
+            {
+                var ean13 = "0" + normalizedBarcode;
+                offProduct = await dbContext.OpenFoodFactsProducts
+                    .FirstOrDefaultAsync(p => p.Barcode == ean13 || p.NormalizedBarcode == ean13, cancellationToken);
+                
+                if (offProduct != null)
+                {
+                    matchMethod = "barcode_upc_to_ean13";
+                    matchConfidence = 1.0;
+                }
+            }
+            
+            // Strategy 1c: Try original barcode (before normalization) in case it's already correct
+            if (offProduct == null && importedProduct.Barcode != normalizedBarcode)
+            {
+                offProduct = await dbContext.OpenFoodFactsProducts
+                    .FirstOrDefaultAsync(p => p.Barcode == importedProduct.Barcode, cancellationToken);
+                
+                if (offProduct != null)
+                {
+                    matchMethod = "barcode_original";
+                    matchConfidence = 1.0;
+                }
+            }
         }
 
         // Strategy 2: Fallback to product name matching (if barcode is SKU or no match)
         if (offProduct == null && !string.IsNullOrWhiteSpace(importedProduct.ProductName))
         {
-            var searchTerm = importedProduct.ProductName.ToLower().Trim();
+            // Normalize and expand abbreviations
+            var normalizedName = _nameNormalizer.Normalize(importedProduct.ProductName);
+            var searchTerm = normalizedName.ToLower().Trim();
+            
+            // Extract brand for better filtering
+            var extractedBrand = _brandExtractor.ExtractBrand(importedProduct.ProductName);
             
             // Try exact name match first
             offProduct = await dbContext.OpenFoodFactsProducts
@@ -71,23 +111,35 @@ public class ComparisonService : IComparisonService
             }
             else
             {
-                // Try partial name match (fuzzy)
-                var products = await dbContext.OpenFoodFactsProducts
-                    .Where(p => p.ProductName != null && EF.Functions.Like(p.ProductName.ToLower(), $"%{searchTerm}%"))
-                    .Take(5)
+                // Try partial name match with brand filter (fuzzy)
+                var query = dbContext.OpenFoodFactsProducts
+                    .Where(p => p.ProductName != null && EF.Functions.Like(p.ProductName.ToLower(), $"%{searchTerm}%"));
+                
+                // Filter by brand if extracted
+                if (!string.IsNullOrEmpty(extractedBrand))
+                {
+                    query = query.Where(p => p.Brands != null && 
+                        EF.Functions.Like(p.Brands.ToLower(), $"%{extractedBrand.ToLower()}%"));
+                }
+                
+                var products = await query
+                    .Take(10)
                     .ToListAsync(cancellationToken);
                 
-                // Find best match by similarity
+                // Find best match using advanced similarity
                 offProduct = products
-                    .Select(p => new { Product = p, Score = CalculateSimilarity(importedProduct.ProductName, p.ProductName ?? "") })
-                    .Where(x => x.Score >= 0.6)
+                    .Select(p => new { 
+                        Product = p, 
+                        Score = _nameNormalizer.CalculateAdvancedSimilarity(importedProduct.ProductName, p.ProductName ?? "") 
+                    })
+                    .Where(x => x.Score >= 0.65) // Slightly higher threshold with better normalization
                     .OrderByDescending(x => x.Score)
                     .FirstOrDefault()?.Product;
                 
                 if (offProduct != null)
                 {
-                    matchMethod = "name_fuzzy";
-                    matchConfidence = 0.6;
+                    matchMethod = extractedBrand != null ? "name_fuzzy_brand" : "name_fuzzy";
+                    matchConfidence = 0.7; // Higher confidence with brand matching
                 }
             }
         }
@@ -95,7 +147,12 @@ public class ComparisonService : IComparisonService
         var result = new ComparisonResult
         {
             ImportedProductId = importedProduct.Id,
-            ComparedAt = DateTime.UtcNow
+            ComparedAt = DateTime.UtcNow,
+            HasNameDiscrepancy = false,
+            HasBrandDiscrepancy = false,
+            HasCategoryDiscrepancy = false,
+            HasAllergenDiscrepancy = false,
+            HasNutritionDiscrepancy = false
         };
 
         if (offProduct == null)
@@ -214,10 +271,20 @@ public class ComparisonService : IComparisonService
             .Where(b => !string.IsNullOrEmpty(b))
             .Distinct()
             .ToList();
+        
+        // TEMPORARY: Also include legacy normalized barcodes (with FIRST leading zero removed)
+        // This handles OFF products that haven't been re-normalized yet
+        // Old buggy logic: 13-digit barcodes had the FIRST leading zero removed → 12 digits
+        var legacyNormalizedBarcodes = normalizedBarcodes
+            .Where(b => b.StartsWith("0") && b.Length == 13)
+            .Select(b => b.Substring(1)) // Remove FIRST zero only, not all zeros
+            .ToList();
+        
+        var allBarcodesToSearch = normalizedBarcodes.Concat(legacyNormalizedBarcodes).Distinct().ToList();
 
-        Console.WriteLine($"[COMPARISON] Loading {normalizedBarcodes.Count} potential barcode matches from database...");
+        Console.WriteLine($"[COMPARISON] Loading {normalizedBarcodes.Count} potential barcode matches (+{legacyNormalizedBarcodes.Count} legacy) from database...");
         var offProductsByBarcode = await dbContext.OpenFoodFactsProducts
-            .Where(off => normalizedBarcodes.Contains(off.NormalizedBarcode))
+            .Where(off => allBarcodesToSearch.Contains(off.NormalizedBarcode))
             .ToDictionaryAsync(off => off.NormalizedBarcode, cancellationToken);
         Console.WriteLine($"[COMPARISON] Loaded {offProductsByBarcode.Count} OFF products by barcode");
 
@@ -274,7 +341,12 @@ public class ComparisonService : IComparisonService
                     ImportedProductId = product.Id,
                     MatchStatus = MatchStatus.Error,
                     ComparisonBatchId = comparisonBatchId,
-                    ComparisonDetails = JsonSerializer.Serialize(new { error = ex.Message })
+                    ComparisonDetails = JsonSerializer.Serialize(new { error = ex.Message }),
+                    HasNameDiscrepancy = false,
+                    HasBrandDiscrepancy = false,
+                    HasCategoryDiscrepancy = false,
+                    HasAllergenDiscrepancy = false,
+                    HasNutritionDiscrepancy = false
                 });
             }
         }
@@ -333,15 +405,31 @@ public class ComparisonService : IComparisonService
         bool usedSecondarySearch = false;
         string? secondarySearchMethod = null;
 
-        // Tier 1: Exact Barcode Match (only if it's a valid barcode type)
+        // Tier 1: Exact Barcode Match (only if it's a valid barcode type AND at least 8 digits)
+        // Short codes (< 8 digits) are internal store SKUs, not real UPC/EAN barcodes
+        // Matching them would cause false positives (e.g., store code "62" matching random OFF product)
         if (barcodeType != BarcodeType.Sku && barcodeType != BarcodeType.Unknown && 
-            !string.IsNullOrEmpty(normalizedBarcode))
+            !string.IsNullOrEmpty(normalizedBarcode) && normalizedBarcode.Length >= 8)
         {
             if (offProductsByBarcode.TryGetValue(normalizedBarcode, out offProduct))
             {
                 matchMethod = "BarcodeExact";
                 confidence = 1.0;
                 matchReason = "Exact barcode match";
+            }
+            
+            // TEMPORARY: Try with old buggy normalization (ONE leading zero removed) for backwards compatibility
+            // This handles OFF products that haven't been re-normalized yet
+            // Old buggy logic: 13-digit barcodes had the FIRST leading zero removed → 12 digits
+            if (offProduct == null && normalizedBarcode.StartsWith("0") && normalizedBarcode.Length == 13)
+            {
+                var legacyBarcode = normalizedBarcode.Substring(1); // Remove FIRST zero only, not all zeros
+                if (offProductsByBarcode.TryGetValue(legacyBarcode, out offProduct))
+                {
+                    matchMethod = "BarcodeExact_Legacy";
+                    confidence = 1.0;
+                    matchReason = "Exact barcode match (legacy normalization)";
+                }
             }
         }
 
@@ -383,7 +471,12 @@ public class ComparisonService : IComparisonService
             ComparedAt = DateTime.UtcNow,
             ConfidenceScore = confidence,
             UsedSecondarySearch = usedSecondarySearch,
-            SecondarySearchMethod = secondarySearchMethod
+            SecondarySearchMethod = secondarySearchMethod,
+            HasNameDiscrepancy = false,
+            HasBrandDiscrepancy = false,
+            HasCategoryDiscrepancy = false,
+            HasAllergenDiscrepancy = false,
+            HasNutritionDiscrepancy = false
         };
 
         if (offProduct != null)
@@ -508,21 +601,37 @@ public class ComparisonService : IComparisonService
                         .FirstOrDefault(p => !string.IsNullOrEmpty(p.Brands) && 
                                            FuzzyMatch(importedProduct.Brand, p.Brands));
 
-                    if (brandMatch != null && 0.70 > bestConfidence)
+                    if (brandMatch != null && 0.85 > bestConfidence)
                     {
                         bestMatch = brandMatch;
                         bestMethod = "AINameNormalized_Brand";
-                        bestConfidence = 0.70;
+                        bestConfidence = 0.85;
                         bestReason = "AI-normalized name + brand match";
                     }
                 }
-                // Try just normalized name if no brand match
-                else if (candidates.Any() && 0.65 > bestConfidence)
+                // Try just normalized name if no brand match - RE-ENABLED with improved safeguards
+                // Uses actual similarity score instead of fixed confidence, with 0.70 threshold
+                else if (candidates.Any() && bestConfidence < 0.70)
                 {
-                    bestMatch = candidates.First();
-                    bestMethod = "AINameNormalized";
-                    bestConfidence = 0.65;
-                    bestReason = "AI-normalized name match";
+                    // Calculate similarity scores for all candidates
+                    var scoredCandidates = candidates
+                        .Select(p => new {
+                            Product = p,
+                            Score = CalculateSimilarity(normalizedName, p.ProductName ?? "")
+                        })
+                        .Where(x => x.Score >= 0.70)  // Raised threshold for reliability
+                        .Where(x => !IsGenericProductName(normalizedName))  // Exclude generic names
+                        .OrderByDescending(x => x.Score)
+                        .ToList();
+
+                    var bestCandidate = scoredCandidates.FirstOrDefault();
+                    if (bestCandidate != null && bestCandidate.Score > bestConfidence)
+                    {
+                        bestMatch = bestCandidate.Product;
+                        bestMethod = "AINameNormalized";
+                        bestConfidence = bestCandidate.Score * 0.85;  // Scale confidence (max 0.85)
+                        bestReason = $"AI-normalized name match ({bestCandidate.Score:P0} similarity)";
+                    }
                 }
             }
             catch (Exception ex)
@@ -550,13 +659,13 @@ public class ComparisonService : IComparisonService
                     .ToList();
             }
 
-            // Score all candidates
+            // Score all candidates - raised threshold from 0.65 to 0.85
             var scoredCandidates = candidates
                 .Select(c => new {
                     Product = c,
                     Score = CalculateMultiFieldScore(importedProduct, c)
                 })
-                .Where(x => x.Score >= 0.65)
+                .Where(x => x.Score >= 0.85)
                 .OrderByDescending(x => x.Score)
                 .ToList();
 
@@ -655,6 +764,58 @@ public class ComparisonService : IComparisonService
         var totalWords = Math.Max(words1.Length, words2.Length);
 
         return totalWords > 0 && (double)commonWords / totalWords >= 0.5;
+    }
+
+    /// <summary>
+    /// Checks if a product name is too generic for reliable name-only matching.
+    /// Generic names are more likely to produce false positive matches.
+    /// </summary>
+    private static bool IsGenericProductName(string productName)
+    {
+        if (string.IsNullOrWhiteSpace(productName))
+            return true;
+
+        var normalized = productName.ToLowerInvariant().Trim();
+
+        // Too short - likely to match incorrectly
+        if (normalized.Length < 8)
+            return true;
+
+        // Exact matches for invalid/non-product values
+        var invalidExactValues = new HashSet<string>
+        {
+            "no", "yes", "n/a", "na", "null", "none", "ea", "each",
+            "item", "product", "misc", "other", "unknown", "tbd"
+        };
+        
+        if (invalidExactValues.Contains(normalized))
+            return true;
+
+        // Common generic/open item names that shouldn't match
+        var genericPatterns = new[]
+        {
+            "open item", "open ", "misc ", "unknown", "assorted",
+            "generic", "store brand", "house brand", "private label",
+            "sample", "test", "placeholder", "tbd", "n/a"
+        };
+
+        if (genericPatterns.Any(p => normalized.Contains(p)))
+            return true;
+
+        // Single common words that are too generic
+        var genericSingleWords = new HashSet<string>
+        {
+            "bread", "milk", "eggs", "butter", "cheese", "water", "juice",
+            "coffee", "tea", "sugar", "salt", "flour", "rice", "pasta",
+            "chicken", "beef", "pork", "fish", "salad", "soup", "pizza"
+        };
+
+        // If the entire name is just one generic word, it's too generic
+        var words = normalized.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length == 1 && genericSingleWords.Contains(words[0]))
+            return true;
+
+        return false;
     }
 
     /// <summary>

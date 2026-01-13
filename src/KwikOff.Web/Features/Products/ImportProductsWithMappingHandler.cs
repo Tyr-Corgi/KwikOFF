@@ -19,6 +19,7 @@ public class ImportProductsWithMappingHandler : IRequestHandler<ImportProductsWi
     private readonly IExcelProductReader _excelReader;
     private readonly IBarcodeNormalizer _barcodeNormalizer;
     private readonly IColumnDetectionService _columnDetectionService;
+    private readonly ISmartValueDetector _smartValueDetector;
     private readonly ILogger<ImportProductsWithMappingHandler> _logger;
 
     private const int BatchSize = 1000;
@@ -30,6 +31,7 @@ public class ImportProductsWithMappingHandler : IRequestHandler<ImportProductsWi
         IExcelProductReader excelReader,
         IBarcodeNormalizer barcodeNormalizer,
         IColumnDetectionService columnDetectionService,
+        ISmartValueDetector smartValueDetector,
         ILogger<ImportProductsWithMappingHandler> logger)
     {
         _dbContext = dbContext;
@@ -37,6 +39,7 @@ public class ImportProductsWithMappingHandler : IRequestHandler<ImportProductsWi
         _excelReader = excelReader;
         _barcodeNormalizer = barcodeNormalizer;
         _columnDetectionService = columnDetectionService;
+        _smartValueDetector = smartValueDetector;
         _logger = logger;
     }
 
@@ -189,11 +192,17 @@ public class ImportProductsWithMappingHandler : IRequestHandler<ImportProductsWi
         List<string> headers, List<string> row, ColumnMapping mapping,
         string tenantId, Guid batchId, string fileName, int rowNumber)
     {
-        // Get required fields
-        var barcode = GetValueFromMapping(row, mapping.Barcode);
-        var productName = GetValueFromMapping(row, mapping.ProductName);
+        // Get mapped fields
+        var mappedBarcode = GetValueFromMapping(row, mapping.Barcode);
+        var mappedProductName = GetValueFromMapping(row, mapping.ProductName);
 
-        // Skip rows without required data
+        // Use smart detection to find/fix barcode and product name if they're in wrong columns
+        var smartResult = _smartValueDetector.AnalyzeRow(row, mappedBarcode, mappedProductName);
+        
+        var barcode = smartResult.Barcode;
+        var productName = smartResult.ProductName;
+
+        // Skip rows without required data (even after smart detection)
         if (string.IsNullOrWhiteSpace(barcode) || string.IsNullOrWhiteSpace(productName))
         {
             return null;
@@ -206,12 +215,17 @@ public class ImportProductsWithMappingHandler : IRequestHandler<ImportProductsWi
             originalData[headers[i]] = row[i];
         }
 
+        // Use smart-detected brand if available, otherwise fall back to mapped value
+        var brand = !string.IsNullOrEmpty(smartResult.Brand) 
+            ? smartResult.Brand 
+            : GetValueFromMapping(row, mapping.Brand);
+
         var product = new ImportedProduct
         {
             Barcode = barcode.Trim(),
             NormalizedBarcode = _barcodeNormalizer.Normalize(barcode),
             ProductName = productName.Trim(),
-            Brand = GetValueFromMapping(row, mapping.Brand),
+            Brand = brand,
             Category = GetValueFromMapping(row, mapping.Category),
             Description = GetValueFromMapping(row, mapping.Description),
             Supplier = GetValueFromMapping(row, mapping.Supplier),
